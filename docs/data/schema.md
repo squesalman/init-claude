@@ -116,11 +116,18 @@ Constraints/indexes:
 
 - `CHECK`: `risk_currency` is set if and only if `planned_risk_amount` is set
   (`journalentry_risk_currency_required_with_amount`).
-- `(user_id) WHERE rules_followed IS NULL` — `journalentry_not_journaled_idx`. mvp.md story 6's
-  "not journaled" filter state, as specified in ADR-0003's index list. Verified with `EXPLAIN`.
-- `(user_id, rules_followed)` — `journalentry_user_flag_idx`. **Added beyond ADR-0003's list**
-  to cover story 6's other two filter states (yes/no), which the partial NULL-only index above
-  doesn't serve. Table is one row per trade, so this is cheap.
+- `(user_id, rules_followed)` — `journalentry_user_flag_idx`. Covers all three of story 6's
+  rule-followed filter states in one index: yes, no, and "not journaled"
+  (`WHERE rules_followed IS NULL`, which a composite btree serves directly on the second
+  column — verified with `EXPLAIN`: `Index Scan using journalentry_user_flag_idx ... Index
+  Cond: ((user_id = 1) AND (rules_followed IS NULL))`).
+
+  ADR-0003's index list separately specified `(user_id) WHERE rules_followed IS NULL` as its
+  own partial index. Built initially per the ADR, then **dropped per code review**
+  (`journalentry_not_journaled_idx`, removed in `journal/migrations/0005_...`): it was
+  redundant once `journalentry_user_flag_idx` existed to cover the yes/no states, since the
+  composite index serves the NULL case just as well (confirmed above), and this table is one
+  row per trade — cheap either way, but no reason to carry two indexes for one query shape.
 
 ## Tenant isolation
 
@@ -167,6 +174,18 @@ Verified in `journal/tests.py`:
 - All timestamps: `TIMESTAMPTZ` (`USE_TZ = True`), stored UTC, rendered in `user.timezone`
   (rendering is `backend-engineer`/`frontend-engineer` territory, not built here).
 - No `FloatField` anywhere in `accounts/models.py` or `journal/models.py`.
+
+**Deviation, flagged per code review**: every currency column (`accounts_user.base_currency`,
+`journal_execution.currency`, `journal_journalentry.risk_currency`) is `VARCHAR(3)`, not
+ADR-0003's literal `CHAR(3)`. Django's `CharField` always maps to `varchar` regardless of
+`max_length` — there's no built-in fixed-length char field, so matching `CHAR(3)` exactly
+would mean a custom `Field` subclass overriding `db_type()` for a 3-byte column, with no
+functional upside: Postgres's own documentation recommends `varchar(n)`/`text` over `char(n)`
+in general, because `char(n)` pads values with trailing spaces and that padding is a
+long-standing source of surprise (`'USD' = 'USD '` behavior, `rstrip`-on-read semantics).
+`VARCHAR(3)` stores and compares exactly the 3-letter ISO 4217 codes this schema needs, with
+none of that padding behavior. Kept as documented deviation rather than "fixed" to a type
+Postgres itself steers people away from.
 
 ## Known gaps (not this task's scope)
 

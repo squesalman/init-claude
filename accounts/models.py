@@ -58,6 +58,8 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     email = models.EmailField(max_length=254)
     timezone = models.CharField(max_length=64, default="UTC", validators=[validate_timezone])
+    # VARCHAR(3), not ADR-0003's literal CHAR(3) — see journal/models.py's
+    # Execution.currency comment and docs/data/schema.md for why.
     base_currency = models.CharField(max_length=3, default="USD")
     trading_rules = models.TextField(blank=True, default="")
 

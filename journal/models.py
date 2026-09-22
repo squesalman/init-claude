@@ -170,6 +170,9 @@ class Execution(UserOwned):
     price = models.DecimalField(max_digits=20, decimal_places=10)
     contract_multiplier = models.DecimalField(max_digits=20, decimal_places=10, default=1)
     fees = models.DecimalField(max_digits=19, decimal_places=4, default=0)
+    # VARCHAR(3), not ADR-0003's literal CHAR(3) — see docs/data/schema.md "Money /
+    # quantity / time" for why (Django has no native fixed-length char field; Postgres's
+    # own docs discourage CHAR(n) generally). Deviation documented, not silent.
     currency = models.CharField(max_length=3)
     executed_at = models.DateTimeField()
     source = models.CharField(max_length=8, choices=SOURCE_CHOICES)
@@ -243,6 +246,7 @@ class JournalEntry(UserOwned):
     rules_followed = models.BooleanField(null=True, blank=True)
     stop_price = models.DecimalField(max_digits=20, decimal_places=10, null=True, blank=True)
     planned_risk_amount = models.DecimalField(max_digits=19, decimal_places=4, null=True, blank=True)
+    # VARCHAR(3), not CHAR(3) — see the comment on Execution.currency above.
     risk_currency = models.CharField(max_length=3, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -259,14 +263,11 @@ class JournalEntry(UserOwned):
             ),
         ]
         indexes = [
-            # story 6's "not journaled" filter, and the far more common predicate than a
-            # specific yes/no value — kept as its own partial index per ADR-0003's list.
-            models.Index(
-                fields=["user"],
-                name="journalentry_not_journaled_idx",
-                condition=models.Q(rules_followed__isnull=True),
-            ),
-            # story 6's yes/no split of the same filter, covering the non-NULL states.
+            # Covers all three of story 6's rule-followed filter states (yes/no/not
+            # journaled — the last is `WHERE rules_followed IS NULL`, which this
+            # composite index serves directly; a separate partial index scoped to just
+            # that NULL case, as ADR-0003's list suggested, would be redundant with this
+            # one and was dropped per code review).
             models.Index(fields=["user", "rules_followed"], name="journalentry_user_flag_idx"),
         ]
 
