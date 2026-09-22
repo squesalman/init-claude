@@ -68,7 +68,7 @@ Default pipeline for a new feature — skip steps that don't apply:
 ### Branching for code-writing agents
 Before delegating to a code-writing agent (`backend-engineer`, `frontend-engineer`, `database-engineer`, `qa-engineer`), the orchestrator creates a branch and worktree for that task first, and the agent works only inside that worktree — never directly on `main`. Doc-only agents (`architect`, `product-manager`, `trading-domain-expert`, `behavior-analyst`, `ux-designer`, `security-reviewer`) keep writing straight to `docs/` on `main`, no branch needed.
 
-Workers never push their branch to `main` themselves. Work stays on the branch until it's been reviewed — either by the orchestrator directly, or via a code-review pass (the `code-review` skill for correctness, `ponytail-review` for over-engineering) — and only the orchestrator merges to `main` afterward.
+Workers never push to `main` or merge their own branch. Once a worker's task is done, the orchestrator pushes its branch and opens a PR (`gh pr create`). The PR is reviewed — via the `code-review` skill for correctness, `ponytail-review` for over-engineering, or the orchestrator directly — and only the orchestrator merges the PR into `main` afterward.
 
 ### Delegation rules
 - Agents start with no memory of this conversation. Every prompt must state the goal, point to the relevant docs/files, and say what to return.
