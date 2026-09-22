@@ -1,2 +1,11 @@
 all_trades_export.csv
 *.csv
+
+# Python / Django / uv
+__pycache__/
+*.pyc
+.venv/
+db.sqlite3
+staticfiles/
+.pytest_cache/
+.env

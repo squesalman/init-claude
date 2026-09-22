@@ -1,0 +1,21 @@
+# Dev only, per ADR-0002: Postgres in Docker, Django runs on the host via
+# `uv run manage.py runserver`. Prod uses compose.prod.yaml (not built yet).
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-trading_journal}
+      POSTGRES_USER: ${POSTGRES_USER:-trading_journal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trading_journal}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trading_journal}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  db_data:
