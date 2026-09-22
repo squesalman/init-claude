@@ -29,7 +29,9 @@ SECRET_KEY = os.environ.get(
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DJANGO_DEBUG', 'true').lower() == 'true'
+# Fail closed: an unset/misconfigured DJANGO_DEBUG on a real deployment must not
+# silently turn DEBUG on. Dev sets DJANGO_DEBUG=true explicitly (.env.example).
+DEBUG = os.environ.get('DJANGO_DEBUG', 'false').lower() == 'true'
 
 ALLOWED_HOSTS = [h for h in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if h]
 
