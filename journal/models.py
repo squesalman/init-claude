@@ -70,8 +70,8 @@ class RawImportRow(UserOwned):
     )
     line_number = models.IntegerField()
     raw = models.JSONField()
-    # ADR-0003 says VARCHAR(16), but its own enum value "skipped_duplicate" is 17 chars —
-    # widened to fit; a column-width bug in the ADR, not a deviation from its intent.
+    # VARCHAR(20), matching ADR-0003 (corrected upstream to VARCHAR(20); the original
+    # VARCHAR(16) couldn't fit its own "skipped_duplicate" enum value).
     status = models.CharField(max_length=20, choices=STATUS_CHOICES)
     error = models.TextField(blank=True, default="")
 
@@ -80,6 +80,10 @@ class RawImportRow(UserOwned):
             models.UniqueConstraint(
                 fields=["import_batch", "line_number"],
                 name="rawimportrow_batch_line_uniq",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(status__in=["imported", "skipped_duplicate", "failed"]),
+                name="rawimportrow_status_valid",
             ),
         ]
 
@@ -163,8 +167,19 @@ class JournalEntry(UserOwned):
     has no database id of its own.
     """
 
+    # RESTRICT, not CASCADE and not PROTECT. ADR-0003's manual-entry correction flow is
+    # delete-old-execution + insert-new-execution; CASCADE would silently destroy the note
+    # + rules_followed flag along with the old execution. RESTRICT raises
+    # django.db.models.deletion.RestrictedError on a standalone `execution.delete()`,
+    # forcing the correction code to explicitly re-point this row at the new execution (or
+    # deliberately delete the journal entry) first — no silent data loss. Unlike PROTECT,
+    # RESTRICT still allows account deletion to cascade in one statement (ADR-0003's "one
+    # statement" account-deletion guarantee): when a User is deleted, this JournalEntry is
+    # already being deleted via its own `user` FK (CASCADE) in the same operation, so
+    # Execution's cascade-delete isn't blocked by this relation. PROTECT would raise even
+    # in that case, breaking full-account deletion.
     opening_execution = models.OneToOneField(
-        Execution, on_delete=models.CASCADE, related_name="journal_entry"
+        Execution, on_delete=models.RESTRICT, related_name="journal_entry"
     )
     note = models.TextField(blank=True, default="")
     # NULL = not yet answered. No default, deliberately (story 4): "journaled" is defined

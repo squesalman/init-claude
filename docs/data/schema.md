@@ -47,10 +47,12 @@ Verbatim CSV rows, re-parseable. `user_id` denormalized here rather than reached
 | `import_batch_id` | `BIGINT FK → journal_importbatch` | no | `ON DELETE CASCADE` |
 | `line_number` | `INTEGER` | no | 1-based |
 | `raw` | `JSONB` | no | `{header: cell}`, strings only, no coercion |
-| `status` | `VARCHAR(20)` | no | `imported` / `skipped_duplicate` / `failed`. **Deviation from ADR-0003, which says `VARCHAR(16)`**: `'skipped_duplicate'` is 17 characters, so the ADR's own stated width can't hold its own enum value. Widened to 20 rather than shortening the value, which is used verbatim elsewhere. Flagging for `architect` to fix in ADR-0003 on next revision. |
+| `status` | `VARCHAR(20)` | no | `CHECK (status IN ('imported','skipped_duplicate','failed'))` — `rawimportrow_status_valid`. Matches ADR-0003's `VARCHAR(20)` (corrected upstream from an original `VARCHAR(16)` that couldn't fit its own `'skipped_duplicate'` enum value). |
 | `error` | `TEXT` | no, default `''` | shown to the user, never silently dropped |
 
-Constraint: `UNIQUE (import_batch_id, line_number)`.
+Constraints: `UNIQUE (import_batch_id, line_number)`; `CHECK (status IN (...))` above — code review
+caught that `status` had `choices=` (Python-only) but no DB-level enum constraint, unlike
+`Execution.side`/`source` in the same PR. Added for parity.
 
 ## `journal_execution` (`UserOwned`) — source of truth
 
@@ -102,7 +104,7 @@ One per trade, keyed by the execution that opened it.
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
-| `opening_execution_id` | `BIGINT FK → journal_execution`, `UNIQUE` | no | `ON DELETE CASCADE`. `OneToOneField` — this *is* the trade id |
+| `opening_execution_id` | `BIGINT FK → journal_execution`, `UNIQUE` | no | `ON DELETE RESTRICT` (not `CASCADE`). `OneToOneField` — this *is* the trade id. **Changed in code review**: `CASCADE` let a trade correction (delete-old-execution + insert-new-execution, per ADR-0003 §4) silently destroy the note + `rules_followed` flag with no recovery. `RESTRICT` raises `RestrictedError` on a standalone `execution.delete()` while a `JournalEntry` still points at it, forcing the correction code to explicitly re-point (`UPDATE opening_execution_id`) or deliberately delete the entry first. `PROTECT` was considered and rejected: it raises unconditionally, which would also block full account deletion (ADR-0003's "one statement" guarantee) — `RESTRICT` specifically allows deletion when the protecting row is being deleted in the same cascade (verified: `user.delete()` still removes the execution and its journal entry together in one call). |
 | `note` | `TEXT` | no, default `''` | optional reasoning |
 | `rules_followed` | `BOOLEAN` | yes, no default | `NULL` = not yet answered. "Journaled" ≡ `rules_followed IS NOT NULL` |
 | `stop_price` | `NUMERIC(20,10)` | yes | R-multiple input |
