@@ -5,7 +5,6 @@ territory) — there is deliberately no `trade` table here.
 """
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.expressions import RawSQL
 
@@ -13,14 +12,6 @@ from django.db.models.expressions import RawSQL
 # 100-1000x that) — a sanity/abuse guard against a malformed or hostile upload, not a
 # tight limit expected to bind on legitimate files.
 MAX_RAW_FILE_BYTES = 10 * 1024 * 1024
-
-
-def validate_raw_file_size(value: bytes) -> None:
-    if len(value) > MAX_RAW_FILE_BYTES:
-        raise ValidationError(
-            f"Uploaded file is {len(value)} bytes, exceeding the "
-            f"{MAX_RAW_FILE_BYTES}-byte cap."
-        )
 
 
 class UserScopedManager(models.Manager):
@@ -65,22 +56,58 @@ class UserOwned(models.Model):
 
     objects = UserScopedManager()
     # Explicit, named escape hatch: a plain, unrestricted manager. Used by Django
-    # internals — each concrete model below sets both `Meta.base_manager_name` (the
+    # internals — every concrete model inherits both `Meta.base_manager_name` (the
     # deletion collector's cascades, e.g. `user.delete()`, use `_base_manager`) and
     # `Meta.default_manager_name` (reverse-FK RelatedManagers, e.g.
     # `import_batch.rows.all()`, are built off `_default_manager.__class__` — without
     # this, traversing a relation from an already-`.for_user()`-scoped parent row would
-    # hit the same raise as a top-level unscoped query, even though it can't leak) —
-    # and by any deliberate, reviewed unscoped access. Never call this from
-    # request-handling code.
+    # hit the same raise as a top-level unscoped query, even though it can't leak) from
+    # this abstract base's own Meta (see below) — and by any deliberate, reviewed
+    # unscoped access. Never call this from request-handling code.
+    #
+    # Known gap, documented per code review rather than built for: this manager (and the
+    # cross-tenant FK guard on save() below) only guards the `save()` path. Django never
+    # calls `save()` for `bulk_create`/`bulk_update` — `Model.unscoped.bulk_create(...)`
+    # bypasses both entirely. No caller does bulk writes yet (no importer in this PR), so
+    # no bulk-write guard is built speculatively. Any future bulk-write code (the Topstep
+    # importer) must either loop per-row `.save()` or add its own explicit ownership
+    # check before calling `bulk_create`/`bulk_update` — see docs/data/schema.md's
+    # "Cross-tenant FK integrity" section.
     unscoped = models.Manager()
 
     class Meta:
         abstract = True
+        # Inherited by every concrete subclass via `class Meta(UserOwned.Meta): ...`
+        # (Django requires that explicit subclassing to pull in an abstract base's Meta
+        # options — a bare `class Meta:` in the child would not see these). Previously
+        # copy-pasted into all four subclasses; DRY'd up per code review.
+        base_manager_name = "unscoped"
+        default_manager_name = "unscoped"
 
-    def save(self, *args, **kwargs):
-        self._check_cross_tenant_fks()
-        super().save(*args, **kwargs)
+    def save(self, *args, update_fields=None, **kwargs):
+        # Perf fix per code review: only re-run the (one SELECT per guarded FK)
+        # cross-tenant check when it could actually matter — a full save/create, or an
+        # update_fields save that actually touches one of the guarded FK fields. A
+        # plain-field update (e.g. `entry.save(update_fields=["note"])`) skips it
+        # entirely; the FK columns aren't changing, so there's nothing new to verify.
+        if update_fields is None:
+            self._check_cross_tenant_fks()
+        else:
+            touched = set(update_fields)
+            if any(f.name in touched for f in self._guarded_fk_fields()):
+                self._check_cross_tenant_fks()
+        super().save(*args, update_fields=update_fields, **kwargs)
+
+    def _guarded_fk_fields(self):
+        """Every ForeignKey (OneToOneField included — it subclasses ForeignKey) whose
+        `related_model` is itself a UserOwned subclass, i.e. every cross-tenant-checked
+        relation on this model."""
+        for field in self._meta.get_fields():
+            if not isinstance(field, models.ForeignKey):
+                continue
+            related_model = field.related_model
+            if isinstance(related_model, type) and issubclass(related_model, UserOwned):
+                yield field
 
     def _check_cross_tenant_fks(self) -> None:
         """
@@ -93,23 +120,18 @@ class UserOwned(models.Model):
         `entry.opening_execution`.
 
         Fixed once, here, generically — not per model — since the same shape of bug
-        applies to every cross-FK in the schema. Runs on every `save()` call (not just
-        `full_clean()`, which isn't reliably called — see UserManager._create_user's own
-        bug in accounts/models.py). Introspects every ForeignKey (OneToOneField included,
-        it subclasses ForeignKey) whose `related_model` is itself a UserOwned subclass,
-        and compares `user_id` without loading the full related row.
+        applies to every cross-FK in the schema. Runs on every `save()` call by default
+        (not just `full_clean()`, which isn't reliably called — see
+        UserManager._create_user's own bug in accounts/models.py), skipped only for
+        `update_fields` saves that don't touch a guarded field (see `save()` above).
+        Compares `user_id` without loading the full related row.
         """
-        for field in self._meta.get_fields():
-            if not isinstance(field, models.ForeignKey):
-                continue
-            related_model = field.related_model
-            if not (isinstance(related_model, type) and issubclass(related_model, UserOwned)):
-                continue
+        for field in self._guarded_fk_fields():
             related_id = getattr(self, field.attname)
             if related_id is None:
                 continue  # nullable FK not set (e.g. Execution.raw_import_row)
             related_user_id = (
-                related_model.unscoped.filter(pk=related_id)
+                field.related_model.unscoped.filter(pk=related_id)
                 .values_list("user_id", flat=True)
                 .first()
             )
@@ -126,18 +148,22 @@ class ImportBatch(UserOwned):
     broker = models.CharField(max_length=32)
     filename = models.CharField(max_length=255)
     file_sha256 = models.CharField(max_length=64)
-    raw_file = models.BinaryField(validators=[validate_raw_file_size])
+    # max_length gives us Django's built-in MaxLengthValidator for free (BinaryField
+    # appends it automatically when max_length is set) — simpler than the hand-written
+    # validate_raw_file_size this replaced (code review: don't duplicate what the field
+    # already gives you). Runs on full_clean(); the DB CHECK constraint below is the
+    # separate, intentional defense-in-depth backstop for writes that skip full_clean()
+    # (e.g. a plain .create()) — kept as-is, this is a real trust boundary (file upload).
+    raw_file = models.BinaryField(max_length=MAX_RAW_FILE_BYTES)
     uploaded_at = models.DateTimeField(auto_now_add=True)
     row_count = models.IntegerField(default=0)
     imported_count = models.IntegerField(default=0)
     skipped_count = models.IntegerField(default=0)
     failed_count = models.IntegerField(default=0)
 
-    class Meta:
-        base_manager_name = "unscoped"
-        default_manager_name = "unscoped"
+    class Meta(UserOwned.Meta):
         constraints = [
-            # DB-level backstop for validate_raw_file_size above — that validator only
+            # DB-level backstop for the field's max_length validator above — that only
             # runs on full_clean() (e.g. a ModelForm), not on a plain .save()/.create().
             # octet_length() is Postgres-specific, fair game per ADR-0002.
             models.CheckConstraint(
@@ -179,9 +205,7 @@ class RawImportRow(UserOwned):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES)
     error = models.TextField(blank=True, default="")
 
-    class Meta:
-        base_manager_name = "unscoped"
-        default_manager_name = "unscoped"
+    class Meta(UserOwned.Meta):
         constraints = [
             models.UniqueConstraint(
                 fields=["import_batch", "line_number"],
@@ -236,9 +260,7 @@ class Execution(UserOwned):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        base_manager_name = "unscoped"
-        default_manager_name = "unscoped"
+    class Meta(UserOwned.Meta):
         constraints = [
             # Idempotent import, per CLAUDE.md and ADR-0003 §4. Partial so manual entries
             # (NULL broker_execution_id) are exempt.
@@ -310,9 +332,7 @@ class JournalEntry(UserOwned):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    class Meta:
-        base_manager_name = "unscoped"
-        default_manager_name = "unscoped"
+    class Meta(UserOwned.Meta):
         constraints = [
             models.CheckConstraint(
                 condition=(

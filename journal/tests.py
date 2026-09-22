@@ -8,6 +8,8 @@ A new UserOwned subclass added later without a factory registered below fails
 by the isolation test.
 """
 
+from unittest.mock import patch
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
@@ -165,6 +167,40 @@ def test_cross_tenant_fk_is_rejected():
     # Confirms the leak path specifically: no JournalEntry row was created at all, so
     # there's nothing left for for_user(user_b) to surface user_a's execution through.
     assert not JournalEntry.unscoped.filter(opening_execution=execution_a).exists()
+
+
+@pytest.mark.django_db
+def test_save_update_fields_skips_fk_check_unless_a_guarded_field_is_touched():
+    """
+    Perf fix, code review: the cross-tenant FK check (one SELECT per guarded FK) used
+    to re-run on every save(), including a plain field-only update like
+    `entry.save(update_fields=["note"])`, where no FK column is even changing. Now it
+    only runs on a full save/create (update_fields=None) or an update_fields save that
+    actually touches a guarded FK field name.
+    """
+    user = User.objects.create_user(email="j@example.com", password="x")
+    entry = _make_journal_entry(user)
+
+    # A plain-field update_fields save: the check must be skipped entirely.
+    entry.note = "updated"
+    with patch.object(JournalEntry, "_check_cross_tenant_fks", autospec=True) as mocked:
+        entry.save(update_fields=["note"])
+    mocked.assert_not_called()
+    entry.refresh_from_db()
+    assert entry.note == "updated"
+
+    # An update_fields save that *does* touch a guarded FK field: must still run.
+    other_execution = _make_execution(user)
+    entry.opening_execution = other_execution
+    with patch.object(JournalEntry, "_check_cross_tenant_fks", autospec=True) as mocked:
+        entry.save(update_fields=["opening_execution"])
+    mocked.assert_called_once()
+
+    # A full save (update_fields=None, the default): must still run.
+    entry.note = "updated again"
+    with patch.object(JournalEntry, "_check_cross_tenant_fks", autospec=True) as mocked:
+        entry.save()
+    mocked.assert_called_once()
 
 
 @pytest.mark.django_db

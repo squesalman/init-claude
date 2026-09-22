@@ -39,7 +39,10 @@ class UserManager(BaseUserManager):
 
     def _create_user(self, email: str, password: str | None, **extra_fields):
         if not email:
-            raise ValueError("Email is required.")
+            # ValidationError, not ValueError (code review): every other invalid-field
+            # case here is caught via full_clean() and raises ValidationError, so a
+            # caller only needs to catch one exception type from this method.
+            raise ValidationError("Email is required.")
         email = self.normalize_email(email)
         user = self.model(email=email, **extra_fields)
         user.set_password(password)

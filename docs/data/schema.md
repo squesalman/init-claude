@@ -15,7 +15,7 @@ territory per ADR-0003 §5).
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
 | `id` | `BIGINT` (identity) | no | PK |
-| `email` | `VARCHAR(254)` | no | `USERNAME_FIELD`. Case-insensitive uniqueness via `UNIQUE (lower(email))`, **not** the `CITEXT` extension — ADR-0003 §1 names this as an acceptable substitute. Django's `auth.E003` check doesn't recognize expression-based `UniqueConstraint`s, so it's silenced in `config/settings.py` with a comment; the DB guarantee is unaffected and is *stricter* than what the check looks for. Login (`UserManager.get_by_natural_key`) filters on `.annotate(email_lower=Lower("email")).get(email_lower=value.lower())`, **not** `email__iexact=value` — `__iexact` compiles to `UPPER(email) = UPPER(%s)`, which doesn't match this index and forces a seq scan on every login attempt (verified with `EXPLAIN`, round-2 code review: `iexact` → `Seq Scan on accounts_user`; the `Lower()` annotation → `Index Scan using accounts_user_email_lower_uniq`). |
+| `email` | `VARCHAR(254)` | no | `USERNAME_FIELD`. Case-insensitive uniqueness via `UNIQUE (lower(email))`, **not** the `CITEXT` extension — ADR-0003 §1 names this as an acceptable substitute. Django's `auth.E003` check doesn't recognize expression-based `UniqueConstraint`s, so it's silenced in `config/settings.py` with a comment; the DB guarantee is unaffected and is *stricter* than what the check looks for. Login (`UserManager.get_by_natural_key`) filters on `.annotate(email_lower=Lower("email")).get(email_lower=value.lower())`, **not** `email__iexact=value` — `__iexact` compiles to `UPPER(email) = UPPER(%s)`, which doesn't match this index and forces a seq scan on every login attempt (verified with `EXPLAIN`, round-2 code review: `iexact` → `Seq Scan on accounts_user`; the `Lower()` annotation → `Index Scan using accounts_user_email_lower_uniq`). `UserManager._create_user()`'s missing-email guard raises `ValidationError`, not `ValueError` (**round-4 code review**, for consistency — every other invalid-field case in `_create_user()` is caught via `full_clean()` and raises `ValidationError`; a caller only needs to catch one exception type). |
 | `password` | `VARCHAR(128)` | no | Django PBKDF2 hash |
 | `timezone` | `VARCHAR(64)` | no, default `'UTC'` | IANA name, validated against `accounts.models._AVAILABLE_TIMEZONES` — `frozenset(zoneinfo.available_timezones())` computed once at import time, not re-scanned per call (no DB-level check — the set changes only with a tzdata upgrade + process restart, hence a plain module constant rather than a `CHECK` or a per-call cache). Actually enforced on the only signup path: `UserManager._create_user()` calls `full_clean()` before `save()` — **fixed in code review, round 3**: it previously only constructed and saved the model directly, so `validate_timezone` (a field validator, which only runs via `full_clean()`) never ran; `create_user(timezone="Not/A_Real_Zone")` saved without error. |
 | `base_currency` | `VARCHAR(3)` | no, default `'USD'` | ISO 4217. Display default only; never overrides an amount's own currency column |
@@ -31,7 +31,7 @@ One row per uploaded file. `user_id` present per `UserOwned` (RLS-ready).
 | `broker` | `VARCHAR(32)` | no | `'topstep'` today |
 | `filename` | `VARCHAR(255)` | no | as uploaded |
 | `file_sha256` | `VARCHAR(64)` | no | informational only, not a dedupe key |
-| `raw_file` | `BYTEA` | no | uploaded bytes verbatim, so a bad row-split/encoding guess is recoverable. **Size-capped per code review** at `MAX_RAW_FILE_BYTES = 10 MiB` (ADR-0003 assumes "tens of KB"; 10 MiB is a generous sanity/abuse guard, not a tight limit). Enforced two ways: `validate_raw_file_size` (Python validator, runs on `full_clean()`) and a DB `CHECK (octet_length(raw_file) <= 10485760)` — `importbatch_raw_file_size_limit` — as the backstop for writes that skip `full_clean()` (e.g. a plain `.create()`). The DB constraint uses `RawSQL`, so Django's `models.W045` check (silenced in `config/settings.py`) correctly notes it isn't pre-validated by `full_clean()` itself; the Python validator covers that path instead. |
+| `raw_file` | `BYTEA` | no | uploaded bytes verbatim, so a bad row-split/encoding guess is recoverable. **Size-capped per code review** at `MAX_RAW_FILE_BYTES = 10 MiB` (ADR-0003 assumes "tens of KB"; 10 MiB is a generous sanity/abuse guard, not a tight limit). Enforced two ways: `models.BinaryField(max_length=MAX_RAW_FILE_BYTES)` — Django's built-in `MaxLengthValidator`, appended automatically by `BinaryField` when `max_length` is set, runs on `full_clean()` — and a DB `CHECK (octet_length(raw_file) <= 10485760)` — `importbatch_raw_file_size_limit` — as the backstop for writes that skip `full_clean()` (e.g. a plain `.create()`). **Simplified in round-4 code review**: originally a hand-written `validate_raw_file_size` validator function, which duplicated exactly what `max_length=` already gives for free; dropped in favor of the built-in. The DB constraint uses `RawSQL`, so Django's `models.W045` check (silenced in `config/settings.py`) correctly notes it isn't pre-validated by `full_clean()` itself; the field's `max_length` validator covers that path instead. |
 | `uploaded_at` | `TIMESTAMPTZ` | no, `auto_now_add` | |
 | `row_count`, `imported_count`, `skipped_count`, `failed_count` | `INTEGER` | no, default 0 | result summary (mvp.md story 3) |
 
@@ -146,9 +146,19 @@ read and can't leak (the `user` FK is `NOT NULL` and always passed explicitly), 
 would break the ordinary `Model.objects.create(user=..., ...)` idiom.
 
 Each `UserOwned` subclass also gets a second manager, `unscoped` (a plain
-`models.Manager()`), and sets **both** `Meta.base_manager_name = "unscoped"` **and**
-`Meta.default_manager_name = "unscoped"`. Two separate Django internals needed this, found in
-two rounds of code review:
+`models.Manager()`). `Meta.base_manager_name = "unscoped"` and `Meta.default_manager_name =
+"unscoped"` are declared **once**, on `UserOwned`'s own abstract `Meta`, and every concrete
+model inherits them via `class Meta(UserOwned.Meta): ...` — **DRY'd up in round-4 code
+review**: these two lines were previously copy-pasted into all four concrete models'
+`Meta` bodies. Verified this inheritance actually resolves correctly (Django requires the
+explicit `class Meta(UserOwned.Meta)` subclassing — a bare `class Meta:` in a concrete model
+would not see the abstract base's options) by checking `_meta.base_manager_name` /
+`_meta.default_manager_name` / `_meta.abstract` on all four live model classes after the
+change: all four report `abstract=False` (Django resets `abstract` on an abstract base's own
+`Meta` right after building it, specifically so concrete subclasses of `class
+Meta(UserOwned.Meta)` don't inherit `abstract=True`) and both manager names as `"unscoped"`.
+
+Two separate Django internals needed the manager-name pair, found in two rounds of code review:
 
 - `base_manager_name`: the deletion collector (which `user.delete()`'s cascade relies on) uses
   `_base_manager`. Without this, hardening `objects` would have silently broken account
@@ -182,9 +192,27 @@ bug applies to every cross-FK in the schema (`RawImportRow.import_batch`,
 subclass) whose `related_model` is itself a `UserOwned` subclass, fetches only that related
 row's `user_id` via `.unscoped` (a `.values_list("user_id", flat=True)` lookup, not a full-row
 fetch), and raises `CrossTenantForeignKeyError` (a `ValueError` subclass) if it doesn't match
-`self.user_id`. Runs on every `save()` call, not just `full_clean()` — `full_clean()` isn't
-reliably called (see `accounts_user.timezone` above for exactly that failure mode on a
-different model). Nullable cross-FKs (`Execution.raw_import_row`) are skipped when unset.
+`self.user_id`. Runs on every full `save()`/`create()` call, not just `full_clean()` —
+`full_clean()` isn't reliably called (see `accounts_user.timezone` above for exactly that
+failure mode on a different model). Nullable cross-FKs (`Execution.raw_import_row`) are skipped
+when unset.
+
+**Perf fix, round-4 code review**: `save()` accepts `update_fields` and only re-runs the check
+(one `SELECT` per guarded FK) when `update_fields is None` (a full save/create) or when the
+`update_fields` list actually includes one of the guarded FK field names. A plain-field update
+like `entry.save(update_fields=["note"])` skips the check entirely — no FK column is changing,
+so there's nothing new to verify. Verified in `journal/tests.py` (below) by mocking
+`_check_cross_tenant_fks` and asserting it's not called for a `note`-only `update_fields` save,
+but is called for both an `update_fields=["opening_execution"]` save and a full save.
+
+**Known gap, documented rather than built for (round-4 code review)**: this guard is
+`save()`-only. Django never calls `save()` for `bulk_create`/`bulk_update`, so
+`Model.unscoped.bulk_create(...)` bypasses it entirely — there is no protection against a
+cross-tenant FK inserted via a bulk write. No caller does bulk writes yet (no importer exists
+in this PR), so no bulk-write guard is built speculatively. **Any future bulk-write code (the
+Topstep importer) must either loop per-row `.save()` or add its own explicit ownership check
+before calling `bulk_create`/`bulk_update`.** This is also called out as a comment directly on
+`UserOwned.unscoped` in `journal/models.py`.
 
 RLS is not enabled (ADR-0002's trigger — before any non-author account exists — hasn't fired).
 Every table already carries the plain `user_id` column a policy would need, so enabling it
@@ -209,8 +237,22 @@ Verified in `journal/tests.py`:
 - `test_cross_tenant_fk_is_rejected` asserts `CrossTenantForeignKeyError` on the exact
   `JournalEntry`/`opening_execution` scenario confirmed live above, and that no row was
   created at all.
+- `test_save_update_fields_skips_fk_check_unless_a_guarded_field_is_touched` mocks
+  `_check_cross_tenant_fks` and asserts it's skipped for a `note`-only `update_fields`
+  save, but still runs for an `update_fields=["opening_execution"]` save and a full save.
 - `test_execution_contract_multiplier_must_be_positive` asserts `IntegrityError` on
   `contract_multiplier=0`.
+
+### Migration history
+
+`journal`'s migrations were squashed to a single `0001_initial.py` in round-4 code review
+(the prior `0001`–`0007` reflected four rounds of review churn — an index added then
+dropped, `on_delete` changed twice, `Meta` options redeclared then DRY'd up — none of which
+had ever been applied to a real/shipped database on this branch, so there was no reason to
+carry it into permanent history). Verified: fresh `migrate` from zero applies the squashed
+`0001_initial.py` cleanly, `makemigrations --check --dry-run` reports no changes, and the DDL
+inspected via `psql \d journal_execution` afterward is byte-for-byte the same shape as before
+the squash. `accounts` was not touched — its single migration had no churn to squash.
 
 ## Money / quantity / time — confirmed as built
 
