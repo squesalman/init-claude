@@ -17,6 +17,12 @@ class UserManager(BaseUserManager):
 
     use_in_migrations = True
 
+    def get_by_natural_key(self, email: str):
+        # Uniqueness is enforced case-insensitively (UniqueConstraint(Lower("email"))
+        # below), so login lookup must be too, or a user registered as "Foo@x.com" can't
+        # log in typing "foo@x.com". BaseUserManager's default does an exact match.
+        return self.get(**{f"{self.model.USERNAME_FIELD}__iexact": email})
+
     def _create_user(self, email: str, password: str | None, **extra_fields):
         if not email:
             raise ValueError("Email is required.")
