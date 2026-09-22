@@ -65,6 +65,9 @@ Default pipeline for a new feature — skip steps that don't apply:
 6. `qa-engineer` → verify against acceptance criteria and reference vectors
 7. `security-reviewer` → before release, and after touching auth, imports, or data access
 
+### Branching for code-writing agents
+Before delegating to a code-writing agent (`backend-engineer`, `frontend-engineer`, `database-engineer`, `qa-engineer`), the orchestrator creates a branch and worktree for that task first, and the agent works only inside that worktree — never directly on `main`. Doc-only agents (`architect`, `product-manager`, `trading-domain-expert`, `behavior-analyst`, `ux-designer`, `security-reviewer`) keep writing straight to `docs/` on `main`, no branch needed.
+
 ### Delegation rules
 - Agents start with no memory of this conversation. Every prompt must state the goal, point to the relevant docs/files, and say what to return.
 - Handoffs happen through files in `docs/`, not chat. Tell each agent which doc to read and which to write.
