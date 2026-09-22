@@ -82,7 +82,7 @@ Workers never push to `main` or merge their own branch. Once a worker's task is 
 
 ## Working conventions
 - Docs layout: `docs/product/`, `docs/adr/` (`NNNN-title.md`), `docs/domain/`, `docs/behavior/`, `docs/design/`, `docs/data/` (data dictionary).
-- Use the superpowers skills where they fit: `brainstorming` before designing a new feature, `writing-plans` for multi-step work, `test-driven-development` for calculations and parsers, `systematic-debugging` for bugs, `verification-before-completion` before claiming anything is done.
+- Use the superpowers skills where they fit: `brainstorming` before designing a new feature, `writing-plans` for multi-step work, `test-driven-development` for all code-writing agents (not just calculations/parsers) — write the test first, and leave it in the repo; a fix verified only by a throwaway script that gets deleted afterward doesn't count as tested, `systematic-debugging` for bugs, `verification-before-completion` before claiming anything is done.
 - Report results faithfully: say what was run, what passed or failed, and what was not verified.
 - Keep changes small and focused; no speculative abstractions.
 - Update this file when the stack, commands, or agent roster changes.
