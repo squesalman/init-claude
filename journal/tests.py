@@ -111,3 +111,41 @@ def test_create_and_unscoped_escape_hatch_still_work():
     for model, factory in FACTORIES.items():
         row = factory(user)  # exercises Model.objects.create(...) in every factory
         assert row in model.unscoped.all(), model.__name__
+
+
+@pytest.mark.django_db
+def test_related_manager_still_works_on_a_scoped_parent():
+    """
+    Reverse-FK traversal (e.g. `import_batch.rows.all()`) is safe even though it doesn't
+    go through `.for_user()` explicitly — Django builds a RelatedManager scoped to one
+    already-fetched parent row, so it can't leak across users. Without
+    `Meta.default_manager_name = "unscoped"`, this used to hit UserScopedManager's raise
+    even when the parent itself came from a correctly `.for_user()`-scoped query.
+    """
+    user = User.objects.create_user(email="d@example.com", password="x")
+    row = _make_raw_import_row(user)
+
+    batch = ImportBatch.objects.for_user(user).first()
+    assert row in batch.rows.all()
+
+    # The chokepoint itself is unaffected: a direct unscoped query still raises.
+    with pytest.raises(RuntimeError):
+        ImportBatch.objects.all()
+
+
+@pytest.mark.django_db
+def test_user_delete_cascades_all_owned_rows_in_one_call():
+    """
+    ADR-0003's "account deletion is one statement" guarantee, previously only verified
+    by a comment (RESTRICT + base_manager_name/default_manager_name="unscoped" on
+    JournalEntry.opening_execution) and a manual script that was deleted after one run.
+    One row per UserOwned model, then user.delete() must remove all of them.
+    """
+    user = User.objects.create_user(email="e@example.com", password="x")
+    rows = {model: factory(user) for model, factory in FACTORIES.items()}
+
+    user.delete()
+
+    for model, row in rows.items():
+        assert not model.unscoped.filter(pk=row.pk).exists(), model.__name__
+    assert not User.objects.filter(pk=user.pk).exists()

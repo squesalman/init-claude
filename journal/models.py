@@ -61,9 +61,13 @@ class UserOwned(models.Model):
 
     objects = UserScopedManager()
     # Explicit, named escape hatch: a plain, unrestricted manager. Used by Django
-    # internals (each concrete model below routes `Meta.base_manager_name` here, so the
-    # deletion collector's cascades — e.g. `user.delete()` — aren't blocked by the raise
-    # above) and by any deliberate, reviewed unscoped access. Never call this from
+    # internals — each concrete model below sets both `Meta.base_manager_name` (the
+    # deletion collector's cascades, e.g. `user.delete()`, use `_base_manager`) and
+    # `Meta.default_manager_name` (reverse-FK RelatedManagers, e.g.
+    # `import_batch.rows.all()`, are built off `_default_manager.__class__` — without
+    # this, traversing a relation from an already-`.for_user()`-scoped parent row would
+    # hit the same raise as a top-level unscoped query, even though it can't leak) —
+    # and by any deliberate, reviewed unscoped access. Never call this from
     # request-handling code.
     unscoped = models.Manager()
 
@@ -86,6 +90,7 @@ class ImportBatch(UserOwned):
 
     class Meta:
         base_manager_name = "unscoped"
+        default_manager_name = "unscoped"
         constraints = [
             # DB-level backstop for validate_raw_file_size above — that validator only
             # runs on full_clean() (e.g. a ModelForm), not on a plain .save()/.create().
@@ -131,6 +136,7 @@ class RawImportRow(UserOwned):
 
     class Meta:
         base_manager_name = "unscoped"
+        default_manager_name = "unscoped"
         constraints = [
             models.UniqueConstraint(
                 fields=["import_batch", "line_number"],
@@ -187,6 +193,7 @@ class Execution(UserOwned):
 
     class Meta:
         base_manager_name = "unscoped"
+        default_manager_name = "unscoped"
         constraints = [
             # Idempotent import, per CLAUDE.md and ADR-0003 §4. Partial so manual entries
             # (NULL broker_execution_id) are exempt.
@@ -253,6 +260,7 @@ class JournalEntry(UserOwned):
 
     class Meta:
         base_manager_name = "unscoped"
+        default_manager_name = "unscoped"
         constraints = [
             models.CheckConstraint(
                 condition=(

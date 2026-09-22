@@ -15,9 +15,9 @@ territory per ADR-0003 §5).
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
 | `id` | `BIGINT` (identity) | no | PK |
-| `email` | `VARCHAR(254)` | no | `USERNAME_FIELD`. Case-insensitive uniqueness via `UNIQUE (lower(email))`, **not** the `CITEXT` extension — ADR-0003 §1 names this as an acceptable substitute. Django's `auth.E003` check doesn't recognize expression-based `UniqueConstraint`s, so it's silenced in `config/settings.py` with a comment; the DB guarantee is unaffected and is *stricter* than what the check looks for. |
+| `email` | `VARCHAR(254)` | no | `USERNAME_FIELD`. Case-insensitive uniqueness via `UNIQUE (lower(email))`, **not** the `CITEXT` extension — ADR-0003 §1 names this as an acceptable substitute. Django's `auth.E003` check doesn't recognize expression-based `UniqueConstraint`s, so it's silenced in `config/settings.py` with a comment; the DB guarantee is unaffected and is *stricter* than what the check looks for. Login (`UserManager.get_by_natural_key`) filters on `.annotate(email_lower=Lower("email")).get(email_lower=value.lower())`, **not** `email__iexact=value` — `__iexact` compiles to `UPPER(email) = UPPER(%s)`, which doesn't match this index and forces a seq scan on every login attempt (verified with `EXPLAIN`, round-2 code review: `iexact` → `Seq Scan on accounts_user`; the `Lower()` annotation → `Index Scan using accounts_user_email_lower_uniq`). |
 | `password` | `VARCHAR(128)` | no | Django PBKDF2 hash |
-| `timezone` | `VARCHAR(64)` | no, default `'UTC'` | IANA name, validated against `zoneinfo.available_timezones()` at the Python/form layer (no DB-level check — the set changes with tzdata updates) |
+| `timezone` | `VARCHAR(64)` | no, default `'UTC'` | IANA name, validated against a cached wrapper around `zoneinfo.available_timezones()` (`accounts.models._available_timezones`, `@functools.lru_cache(maxsize=1)`) at the Python/form layer — uncached, that call re-scans the tzdata directory on every `User.save()`/`full_clean()` (no DB-level check — the set changes with tzdata updates, hence the cache rather than a `CHECK`) |
 | `base_currency` | `VARCHAR(3)` | no, default `'USD'` | ISO 4217. Display default only; never overrides an amount's own currency column |
 | `trading_rules` | `TEXT` | no, default `''` | The entire "my rules" feature (mvp.md story 5). No versioning — past journal entries' `rules_followed` flags are unaffected by later edits, by construction |
 | `is_active`, `is_staff`, `is_superuser`, `last_login`, `date_joined` | Django defaults | | |
@@ -146,12 +146,26 @@ read and can't leak (the `user` FK is `NOT NULL` and always passed explicitly), 
 would break the ordinary `Model.objects.create(user=..., ...)` idiom.
 
 Each `UserOwned` subclass also gets a second manager, `unscoped` (a plain
-`models.Manager()`), and sets `Meta.base_manager_name = "unscoped"`. This is the deliberate
-escape hatch: Django's internals (the deletion collector, which `user.delete()`'s cascade
-relies on) use `_base_manager`, which now resolves to the unrestricted manager instead of the
-raising one — without this, hardening `objects` would have silently broken account deletion.
+`models.Manager()`), and sets **both** `Meta.base_manager_name = "unscoped"` **and**
+`Meta.default_manager_name = "unscoped"`. Two separate Django internals needed this, found in
+two rounds of code review:
+
+- `base_manager_name`: the deletion collector (which `user.delete()`'s cascade relies on) uses
+  `_base_manager`. Without this, hardening `objects` would have silently broken account
+  deletion.
+- `default_manager_name`: a reverse-FK `RelatedManager` (e.g. `import_batch.rows.all()`) is
+  built off `_default_manager.__class__`. Without this, traversing a relation from an
+  already-`.for_user()`-scoped parent row hit the same `RuntimeError` as a top-level unscoped
+  query — even though it can't leak (the manager is bound to one specific, already-scoped
+  parent instance, not a fresh query). Found in round-2 review after `base_manager_name` alone
+  shipped in round 1.
+
+Both route to the same unrestricted `unscoped` manager; `Model.objects.<read>()` (the explicit
+`UserScopedManager`) still raises regardless of either setting.
+
 Verified directly: `user.delete()` still removes the user's `ImportBatch`, `RawImportRow`,
-`Execution`, and `JournalEntry` rows in one call.
+`Execution`, and `JournalEntry` rows in one call; `batch.rows.all()` on a
+`.for_user()`-fetched `ImportBatch` works, while `ImportBatch.objects.all()` still raises.
 
 RLS is not enabled (ADR-0002's trigger — before any non-author account exists — hasn't fired).
 Every table already carries the plain `user_id` column a policy would need, so enabling it
@@ -166,6 +180,13 @@ Verified in `journal/tests.py`:
   raise `RuntimeError` for all four models.
 - `test_create_and_unscoped_escape_hatch_still_work` asserts `.create()` and `.unscoped`
   still function normally.
+- `test_related_manager_still_works_on_a_scoped_parent` asserts reverse-FK traversal
+  (`batch.rows.all()`) works on a `.for_user()`-scoped parent, while a direct
+  `ImportBatch.objects.all()` still raises.
+- `test_user_delete_cascades_all_owned_rows_in_one_call` creates one row per `UserOwned`
+  model, calls `user.delete()`, and asserts zero rows remain across all of them — a persisted
+  test for the "one statement" account-deletion invariant that was previously only checked by
+  a manual script and a code comment.
 
 ## Money / quantity / time — confirmed as built
 

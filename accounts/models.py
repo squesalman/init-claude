@@ -1,3 +1,4 @@
+import functools
 from zoneinfo import available_timezones
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
@@ -7,8 +8,16 @@ from django.db import models
 from django.db.models.functions import Lower
 
 
+@functools.lru_cache(maxsize=1)
+def _available_timezones() -> frozenset[str]:
+    # zoneinfo.available_timezones() walks the tzdata directory on every call — cache it
+    # rather than re-scanning the filesystem on every User.save()/full_clean(). Cast to
+    # frozenset so the cached object can't be mutated out from under the cache.
+    return frozenset(available_timezones())
+
+
 def validate_timezone(value: str) -> None:
-    if value not in available_timezones():
+    if value not in _available_timezones():
         raise ValidationError(f"{value!r} is not a known IANA timezone name.")
 
 
@@ -21,7 +30,14 @@ class UserManager(BaseUserManager):
         # Uniqueness is enforced case-insensitively (UniqueConstraint(Lower("email"))
         # below), so login lookup must be too, or a user registered as "Foo@x.com" can't
         # log in typing "foo@x.com". BaseUserManager's default does an exact match.
-        return self.get(**{f"{self.model.USERNAME_FIELD}__iexact": email})
+        #
+        # Not `email__iexact=email`: that compiles to UPPER(email) = UPPER(%s), which
+        # doesn't match the UNIQUE index built on lower(email) — a seq scan on every
+        # login. Annotating Lower(email) and filtering on the annotation compiles to
+        # lower(email) = %s, which the index serves directly.
+        return self.annotate(email_lower=Lower(self.model.USERNAME_FIELD)).get(
+            email_lower=email.lower()
+        )
 
     def _create_user(self, email: str, password: str | None, **extra_fields):
         if not email:
