@@ -75,5 +75,39 @@ def test_for_user_never_returns_another_users_rows():
     for model, factory in FACTORIES.items():
         row = factory(user_a)
 
-        assert list(model.objects.for_user(user_a)) == [row], model.__name__
+        # Membership, not exact-list equality: some factories have side effects that
+        # create rows of *other* models in FACTORIES (e.g. JournalEntry's factory also
+        # creates an Execution). Asserting "this model has exactly one row at this point
+        # in the loop" would silently depend on FACTORIES' dict insertion order — it only
+        # happened to pass before because Execution's own turn ran before JournalEntry's.
+        # Isolation only requires that `row` is visible to its own user and that user_b's
+        # view of this model is empty (user_b never appears in any factory call here).
+        assert row in model.objects.for_user(user_a), model.__name__
         assert list(model.objects.for_user(user_b)) == [], model.__name__
+
+
+@pytest.mark.django_db
+def test_default_manager_blocks_unscoped_reads():
+    """
+    Hardened per code review: tenant isolation was opt-in (nothing stopped a call site
+    from using the unscoped default manager). `Model.objects.<read>()` must now fail
+    loudly instead of silently returning every user's rows — a call site has to opt OUT
+    of scoping via `Model.unscoped`, not opt into it via `.for_user()`.
+    """
+    for model in FACTORIES:
+        with pytest.raises(RuntimeError):
+            model.objects.all()
+        with pytest.raises(RuntimeError):
+            model.objects.filter(pk=1)
+
+
+@pytest.mark.django_db
+def test_create_and_unscoped_escape_hatch_still_work():
+    """`.create()` isn't a read and can't leak (user is a required, explicit kwarg), so
+    it must keep working. `.unscoped` is the deliberate, reviewed escape hatch — Django's
+    internals rely on it (Meta.base_manager_name) for cascades like `user.delete()`."""
+    user = User.objects.create_user(email="c@example.com", password="x")
+
+    for model, factory in FACTORIES.items():
+        row = factory(user)  # exercises Model.objects.create(...) in every factory
+        assert row in model.unscoped.all(), model.__name__

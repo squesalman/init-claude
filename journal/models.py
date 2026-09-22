@@ -9,10 +9,29 @@ from django.db import models
 
 
 class UserScopedManager(models.Manager):
-    """The one chokepoint every query must go through (ADR-0002/0003, CLAUDE.md)."""
+    """
+    The one chokepoint every read must go through (ADR-0002/0003, CLAUDE.md).
+
+    Hardened per code review: the default queryset is deliberately unusable, so a call
+    site has to opt OUT of scoping (via `Model.unscoped`) rather than opt into it. A
+    forgotten `.for_user()` now fails loudly (RuntimeError) instead of silently returning
+    every user's rows. `.create()` is the one exception — it can't leak (the `user` FK is
+    NOT NULL and always passed explicitly), and blocking it would break the ordinary
+    `Model.objects.create(user=..., ...)` idiom used throughout the app and its tests.
+    """
+
+    def get_queryset(self):
+        raise RuntimeError(
+            "Blocked: unscoped query via the default manager on a UserOwned model. Use "
+            "Model.objects.for_user(user) for a read, or Model.unscoped for a deliberate, "
+            "reviewed exception (admin/ops scripts). See journal/models.py:UserScopedManager."
+        )
 
     def for_user(self, user):
-        return self.get_queryset().filter(user=user)
+        return super().get_queryset().filter(user=user)
+
+    def create(self, **kwargs):
+        return super().get_queryset().create(**kwargs)
 
 
 class UserOwned(models.Model):
@@ -26,6 +45,12 @@ class UserOwned(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
 
     objects = UserScopedManager()
+    # Explicit, named escape hatch: a plain, unrestricted manager. Used by Django
+    # internals (each concrete model below routes `Meta.base_manager_name` here, so the
+    # deletion collector's cascades — e.g. `user.delete()` — aren't blocked by the raise
+    # above) and by any deliberate, reviewed unscoped access. Never call this from
+    # request-handling code.
+    unscoped = models.Manager()
 
     class Meta:
         abstract = True
@@ -45,6 +70,7 @@ class ImportBatch(UserOwned):
     failed_count = models.IntegerField(default=0)
 
     class Meta:
+        base_manager_name = "unscoped"
         indexes = [
             models.Index(fields=["user", "-uploaded_at"], name="importbatch_user_uploaded_idx"),
         ]
@@ -76,6 +102,7 @@ class RawImportRow(UserOwned):
     error = models.TextField(blank=True, default="")
 
     class Meta:
+        base_manager_name = "unscoped"
         constraints = [
             models.UniqueConstraint(
                 fields=["import_batch", "line_number"],
@@ -128,6 +155,7 @@ class Execution(UserOwned):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        base_manager_name = "unscoped"
         constraints = [
             # Idempotent import, per CLAUDE.md and ADR-0003 §4. Partial so manual entries
             # (NULL broker_execution_id) are exempt.
@@ -192,6 +220,7 @@ class JournalEntry(UserOwned):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        base_manager_name = "unscoped"
         constraints = [
             models.CheckConstraint(
                 condition=(

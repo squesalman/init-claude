@@ -129,13 +129,36 @@ Every table above except `accounts_user` inherits `journal.models.UserOwned`: a 
 `UserScopedManager.for_user(user)` as the one query chokepoint. `ON DELETE CASCADE` on every
 FK to `user` means account deletion is one `DELETE FROM accounts_user WHERE id = ?`.
 
+**Hardened per code review** (isolation was previously opt-in — nothing stopped a call site
+from using the unscoped default manager and leaking cross-user data): `UserScopedManager`'s
+`get_queryset()` now raises `RuntimeError` unconditionally, so `Model.objects.all()`,
+`.filter()`, `.get()`, etc. all fail loudly instead of silently returning every user's rows.
+`.for_user(user)` bypasses the raise (it calls `super().get_queryset()` directly) and remains
+the one sanctioned read path. `.create()` is separately exempted on the manager — it isn't a
+read and can't leak (the `user` FK is `NOT NULL` and always passed explicitly), so blocking it
+would break the ordinary `Model.objects.create(user=..., ...)` idiom.
+
+Each `UserOwned` subclass also gets a second manager, `unscoped` (a plain
+`models.Manager()`), and sets `Meta.base_manager_name = "unscoped"`. This is the deliberate
+escape hatch: Django's internals (the deletion collector, which `user.delete()`'s cascade
+relies on) use `_base_manager`, which now resolves to the unrestricted manager instead of the
+raising one — without this, hardening `objects` would have silently broken account deletion.
+Verified directly: `user.delete()` still removes the user's `ImportBatch`, `RawImportRow`,
+`Execution`, and `JournalEntry` rows in one call.
+
 RLS is not enabled (ADR-0002's trigger — before any non-author account exists — hasn't fired).
 Every table already carries the plain `user_id` column a policy would need, so enabling it
 later is additive DDL, no migration of existing columns.
 
-Verified: `journal/tests.py` enumerates `UserOwned.__subclasses__()` and asserts
-`for_user(user_a)` never returns `user_b`'s rows, for all four models. A model added later
-without a registered factory fails a separate test loudly instead of being silently skipped.
+Verified in `journal/tests.py`:
+- `test_user_owned_subclasses_have_factories` / `test_for_user_never_returns_another_users_rows`
+  enumerate `UserOwned.__subclasses__()` and assert `for_user(user_a)` never returns
+  `user_b`'s rows, for all four models. A model added later without a registered factory
+  fails loudly instead of being silently skipped.
+- `test_default_manager_blocks_unscoped_reads` asserts `Model.objects.all()`/`.filter()`
+  raise `RuntimeError` for all four models.
+- `test_create_and_unscoped_escape_hatch_still_work` asserts `.create()` and `.unscoped`
+  still function normally.
 
 ## Money / quantity / time — confirmed as built
 
