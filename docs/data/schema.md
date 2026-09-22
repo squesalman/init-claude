@@ -1,0 +1,152 @@
+# Data dictionary — MVP schema
+
+Source of truth for the model: `docs/adr/0003-data-model.md`. This document records what
+was actually built, any corrections found while implementing, and the indexing rationale
+for the MVP dashboard (`docs/product/features/mvp.md` story 6). Built by `database-engineer`
+in `accounts/models.py` and `journal/models.py`; migrations in `accounts/migrations/` and
+`journal/migrations/`.
+
+Two Django apps, four user-owned tables, one user table. No `trade` table — trades are a
+pure function of executions (`journal/matching.py`, not built in this task; `backend-engineer`'s
+territory per ADR-0003 §5).
+
+## `accounts_user`
+
+| Column | Type | Nullable | Notes |
+|---|---|---|---|
+| `id` | `BIGINT` (identity) | no | PK |
+| `email` | `VARCHAR(254)` | no | `USERNAME_FIELD`. Case-insensitive uniqueness via `UNIQUE (lower(email))`, **not** the `CITEXT` extension — ADR-0003 §1 names this as an acceptable substitute. Django's `auth.E003` check doesn't recognize expression-based `UniqueConstraint`s, so it's silenced in `config/settings.py` with a comment; the DB guarantee is unaffected and is *stricter* than what the check looks for. |
+| `password` | `VARCHAR(128)` | no | Django PBKDF2 hash |
+| `timezone` | `VARCHAR(64)` | no, default `'UTC'` | IANA name, validated against `zoneinfo.available_timezones()` at the Python/form layer (no DB-level check — the set changes with tzdata updates) |
+| `base_currency` | `VARCHAR(3)` | no, default `'USD'` | ISO 4217. Display default only; never overrides an amount's own currency column |
+| `trading_rules` | `TEXT` | no, default `''` | The entire "my rules" feature (mvp.md story 5). No versioning — past journal entries' `rules_followed` flags are unaffected by later edits, by construction |
+| `is_active`, `is_staff`, `is_superuser`, `last_login`, `date_joined` | Django defaults | | |
+
+## `journal_importbatch` (`UserOwned`)
+
+One row per uploaded file. `user_id` present per `UserOwned` (RLS-ready).
+
+| Column | Type | Nullable | Notes |
+|---|---|---|---|
+| `broker` | `VARCHAR(32)` | no | `'topstep'` today |
+| `filename` | `VARCHAR(255)` | no | as uploaded |
+| `file_sha256` | `VARCHAR(64)` | no | informational only, not a dedupe key |
+| `raw_file` | `BYTEA` | no | uploaded bytes verbatim, so a bad row-split/encoding guess is recoverable |
+| `uploaded_at` | `TIMESTAMPTZ` | no, `auto_now_add` | |
+| `row_count`, `imported_count`, `skipped_count`, `failed_count` | `INTEGER` | no, default 0 | result summary (mvp.md story 3) |
+
+Index: `(user_id, uploaded_at DESC)` — import history.
+
+## `journal_rawimportrow` (`UserOwned`)
+
+Verbatim CSV rows, re-parseable. `user_id` denormalized here rather than reached only via
+`import_batch_id`, so an RLS policy can bite on it directly (ADR-0003 §"Tenant isolation").
+
+| Column | Type | Nullable | Notes |
+|---|---|---|---|
+| `import_batch_id` | `BIGINT FK → journal_importbatch` | no | `ON DELETE CASCADE` |
+| `line_number` | `INTEGER` | no | 1-based |
+| `raw` | `JSONB` | no | `{header: cell}`, strings only, no coercion |
+| `status` | `VARCHAR(20)` | no | `imported` / `skipped_duplicate` / `failed`. **Deviation from ADR-0003, which says `VARCHAR(16)`**: `'skipped_duplicate'` is 17 characters, so the ADR's own stated width can't hold its own enum value. Widened to 20 rather than shortening the value, which is used verbatim elsewhere. Flagging for `architect` to fix in ADR-0003 on next revision. |
+| `error` | `TEXT` | no, default `''` | shown to the user, never silently dropped |
+
+Constraint: `UNIQUE (import_batch_id, line_number)`.
+
+## `journal_execution` (`UserOwned`) — source of truth
+
+Immutable by convention (never `UPDATE`d; corrections delete+recreate).
+
+| Column | Type | Nullable | Notes |
+|---|---|---|---|
+| `broker` | `VARCHAR(32)` | no | `'topstep'` or `'manual'` |
+| `broker_execution_id` | `VARCHAR(128)` | yes | `NULL` for manual entry |
+| `broker_account_label` | `VARCHAR(64)` | no, default `''` | verbatim from export; no account table yet |
+| `symbol` | `VARCHAR(32)` | no | uppercased, as broker wrote it |
+| `side` | `VARCHAR(4)` | no | `CHECK (side IN ('buy','sell'))` |
+| `quantity` | `NUMERIC(20,10)` | no | `CHECK (quantity > 0)`. Always positive; direction lives in `side` |
+| `price` | `NUMERIC(20,10)` | no | `CHECK (price >= 0)` |
+| `contract_multiplier` | `NUMERIC(20,10)` | no, default 1 | point value per contract, stored per fill so a contract-spec change never rewrites old P&L |
+| `fees` | `NUMERIC(19,4)` | no, default 0 | total cost of this fill |
+| `currency` | `VARCHAR(3)` | no | ISO 4217, applies to `fees` and derived P&L |
+| `executed_at` | `TIMESTAMPTZ` | no | UTC in DB, rendered in `user.timezone` |
+| `source` | `VARCHAR(8)` | no | `CHECK (source IN ('manual','import'))` |
+| `raw_import_row_id` | `BIGINT FK → journal_rawimportrow` | yes | `ON DELETE SET NULL`; `NULL` for manual |
+| `created_at` | `TIMESTAMPTZ` | no, `auto_now_add` | |
+
+Constraints/indexes:
+
+- `UNIQUE (user_id, broker, broker_execution_id) WHERE broker_execution_id IS NOT NULL` —
+  `execution_broker_dedupe`. This *is* idempotent import; no importer-side locking needed.
+  Verified with `EXPLAIN`: a lookup by `(user_id, broker, broker_execution_id)` uses this
+  index directly (`Index Scan using execution_broker_dedupe`).
+- `(user_id, symbol, executed_at)` — `execution_user_symbol_ts_idx`. The FIFO matcher's read
+  pattern: one user's fills for one symbol, oldest first. Verified with `EXPLAIN` on
+  `WHERE user_id = ? ORDER BY symbol, executed_at`.
+- `(user_id, executed_at DESC)` — `execution_user_ts_desc_idx`. Date-bounded loads and the
+  trade list's default recency sort (mvp.md story 6). Verified with `EXPLAIN` on
+  `WHERE user_id = ? ORDER BY executed_at DESC`.
+
+### On story 6's "P&L" sort/filter specifically
+
+There is **no SQL column or index for P&L** — by ADR-0003 §5, P&L doesn't exist until
+`derive_trades()` runs in Python over a user's executions (compute-on-read; sorting/filtering
+by P&L happens after matching, in Python, not pushed into SQL). The index that actually bounds
+this cost is `execution_user_symbol_ts_idx` above: it's what makes "load one user's fills,
+grouped by symbol, in time order" — the input `derive_trades()` needs — an index scan instead
+of a sequential scan. There is nothing further to index for P&L itself without materializing a
+`trade` table, which ADR-0003 explicitly defers until a measured >300ms dashboard.
+
+## `journal_journalentry` (`UserOwned`)
+
+One per trade, keyed by the execution that opened it.
+
+| Column | Type | Nullable | Notes |
+|---|---|---|---|
+| `opening_execution_id` | `BIGINT FK → journal_execution`, `UNIQUE` | no | `ON DELETE CASCADE`. `OneToOneField` — this *is* the trade id |
+| `note` | `TEXT` | no, default `''` | optional reasoning |
+| `rules_followed` | `BOOLEAN` | yes, no default | `NULL` = not yet answered. "Journaled" ≡ `rules_followed IS NOT NULL` |
+| `stop_price` | `NUMERIC(20,10)` | yes | R-multiple input |
+| `planned_risk_amount` | `NUMERIC(19,4)` | yes | R-multiple input |
+| `risk_currency` | `VARCHAR(3)` | yes | required iff `planned_risk_amount` is set |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | no | `auto_now_add` / `auto_now` |
+
+Constraints/indexes:
+
+- `CHECK`: `risk_currency` is set if and only if `planned_risk_amount` is set
+  (`journalentry_risk_currency_required_with_amount`).
+- `(user_id) WHERE rules_followed IS NULL` — `journalentry_not_journaled_idx`. mvp.md story 6's
+  "not journaled" filter state, as specified in ADR-0003's index list. Verified with `EXPLAIN`.
+- `(user_id, rules_followed)` — `journalentry_user_flag_idx`. **Added beyond ADR-0003's list**
+  to cover story 6's other two filter states (yes/no), which the partial NULL-only index above
+  doesn't serve. Table is one row per trade, so this is cheap.
+
+## Tenant isolation
+
+Every table above except `accounts_user` inherits `journal.models.UserOwned`: a plain
+`user_id BIGINT NOT NULL FK → accounts_user ON DELETE CASCADE`, plus
+`UserScopedManager.for_user(user)` as the one query chokepoint. `ON DELETE CASCADE` on every
+FK to `user` means account deletion is one `DELETE FROM accounts_user WHERE id = ?`.
+
+RLS is not enabled (ADR-0002's trigger — before any non-author account exists — hasn't fired).
+Every table already carries the plain `user_id` column a policy would need, so enabling it
+later is additive DDL, no migration of existing columns.
+
+Verified: `journal/tests.py` enumerates `UserOwned.__subclasses__()` and asserts
+`for_user(user_a)` never returns `user_b`'s rows, for all four models. A model added later
+without a registered factory fails a separate test loudly instead of being silently skipped.
+
+## Money / quantity / time — confirmed as built
+
+- Money (`fees`, `planned_risk_amount`): `NUMERIC(19,4)` + a 3-char currency column next to it.
+- Price/quantity (`quantity`, `price`, `contract_multiplier`, `stop_price`): `NUMERIC(20,10)`.
+- All timestamps: `TIMESTAMPTZ` (`USE_TZ = True`), stored UTC, rendered in `user.timezone`
+  (rendering is `backend-engineer`/`frontend-engineer` territory, not built here).
+- No `FloatField` anywhere in `accounts/models.py` or `journal/models.py`.
+
+## Known gaps (not this task's scope)
+
+- No `Meta.db_table` overrides needed — Django's default naming
+  (`<app_label>_<model>` lowercase) already matches ADR-0003's table names exactly.
+- `journal/matching.py` (`derive_trades()`) does not exist yet — `backend-engineer`'s task,
+  per ADR-0003 follow-up 2.
+- No admin registration, views, forms, or API — explicitly out of scope for this task.
