@@ -5,7 +5,22 @@ territory) — there is deliberately no `trade` table here.
 """
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.expressions import RawSQL
+
+# ADR-0003 assumes Topstep exports are "tens of KB." 10 MB is a generous cap (roughly
+# 100-1000x that) — a sanity/abuse guard against a malformed or hostile upload, not a
+# tight limit expected to bind on legitimate files.
+MAX_RAW_FILE_BYTES = 10 * 1024 * 1024
+
+
+def validate_raw_file_size(value: bytes) -> None:
+    if len(value) > MAX_RAW_FILE_BYTES:
+        raise ValidationError(
+            f"Uploaded file is {len(value)} bytes, exceeding the "
+            f"{MAX_RAW_FILE_BYTES}-byte cap."
+        )
 
 
 class UserScopedManager(models.Manager):
@@ -62,7 +77,7 @@ class ImportBatch(UserOwned):
     broker = models.CharField(max_length=32)
     filename = models.CharField(max_length=255)
     file_sha256 = models.CharField(max_length=64)
-    raw_file = models.BinaryField()
+    raw_file = models.BinaryField(validators=[validate_raw_file_size])
     uploaded_at = models.DateTimeField(auto_now_add=True)
     row_count = models.IntegerField(default=0)
     imported_count = models.IntegerField(default=0)
@@ -71,6 +86,19 @@ class ImportBatch(UserOwned):
 
     class Meta:
         base_manager_name = "unscoped"
+        constraints = [
+            # DB-level backstop for validate_raw_file_size above — that validator only
+            # runs on full_clean() (e.g. a ModelForm), not on a plain .save()/.create().
+            # octet_length() is Postgres-specific, fair game per ADR-0002.
+            models.CheckConstraint(
+                condition=RawSQL(
+                    "octet_length(raw_file) <= %s",
+                    (MAX_RAW_FILE_BYTES,),
+                    output_field=models.BooleanField(),
+                ),
+                name="importbatch_raw_file_size_limit",
+            ),
+        ]
         indexes = [
             models.Index(fields=["user", "-uploaded_at"], name="importbatch_user_uploaded_idx"),
         ]

@@ -31,7 +31,7 @@ One row per uploaded file. `user_id` present per `UserOwned` (RLS-ready).
 | `broker` | `VARCHAR(32)` | no | `'topstep'` today |
 | `filename` | `VARCHAR(255)` | no | as uploaded |
 | `file_sha256` | `VARCHAR(64)` | no | informational only, not a dedupe key |
-| `raw_file` | `BYTEA` | no | uploaded bytes verbatim, so a bad row-split/encoding guess is recoverable |
+| `raw_file` | `BYTEA` | no | uploaded bytes verbatim, so a bad row-split/encoding guess is recoverable. **Size-capped per code review** at `MAX_RAW_FILE_BYTES = 10 MiB` (ADR-0003 assumes "tens of KB"; 10 MiB is a generous sanity/abuse guard, not a tight limit). Enforced two ways: `validate_raw_file_size` (Python validator, runs on `full_clean()`) and a DB `CHECK (octet_length(raw_file) <= 10485760)` — `importbatch_raw_file_size_limit` — as the backstop for writes that skip `full_clean()` (e.g. a plain `.create()`). The DB constraint uses `RawSQL`, so Django's `models.W045` check (silenced in `config/settings.py`) correctly notes it isn't pre-validated by `full_clean()` itself; the Python validator covers that path instead. |
 | `uploaded_at` | `TIMESTAMPTZ` | no, `auto_now_add` | |
 | `row_count`, `imported_count`, `skipped_count`, `failed_count` | `INTEGER` | no, default 0 | result summary (mvp.md story 3) |
 

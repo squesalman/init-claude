@@ -42,7 +42,11 @@ AUTH_USER_MODEL = 'accounts.User'
 # UniqueConstraint(Lower("email"), ...), which is a *stricter* guarantee (case-insensitive)
 # than what the check looks for. See ADR-0003 §1 ("lower(email) is an acceptable
 # substitute" for CITEXT) and accounts/models.py.
-SILENCED_SYSTEM_CHECKS = ['auth.E003']
+# models.W045: journal.ImportBatch.raw_file's size-cap CHECK constraint uses RawSQL
+# (octet_length), which Django can't pre-validate in full_clean(). Expected and covered:
+# journal/models.py's validate_raw_file_size validator handles the full_clean() path, and
+# the DB constraint is the backstop for every other write path. See journal/models.py.
+SILENCED_SYSTEM_CHECKS = ['auth.E003', 'models.W045']
 
 
 # Application definition
