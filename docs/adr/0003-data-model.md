@@ -1,6 +1,6 @@
 # ADR-0003: Core data model (executions, derived trades, journal)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-22
 - **Deciders:** architect (proposed), user (to approve)
 - **Depends on:** [ADR-0002](0002-stack-revised.md) (Django + Postgres, `NUMERIC` money, compute-on-read,
