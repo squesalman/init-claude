@@ -49,6 +49,10 @@ class UserScopedManager(models.Manager):
         return super().get_queryset().create(**kwargs)
 
 
+class CrossTenantForeignKeyError(ValueError):
+    """Raised when a UserOwned row's FK to another UserOwned row crosses users."""
+
+
 class UserOwned(models.Model):
     """
     Abstract base for every user-owned table. `user_id` is a plain, non-null column on
@@ -73,6 +77,47 @@ class UserOwned(models.Model):
 
     class Meta:
         abstract = True
+
+    def save(self, *args, **kwargs):
+        self._check_cross_tenant_fks()
+        super().save(*args, **kwargs)
+
+    def _check_cross_tenant_fks(self) -> None:
+        """
+        Root-cause fix for a cross-tenant leak found in code review: nothing checked
+        that a UserOwned row's FK targets (RawImportRow.import_batch,
+        Execution.raw_import_row, JournalEntry.opening_execution, ...) belong to the
+        *same* user as the row itself. Confirmed live:
+        `JournalEntry.objects.create(user=user_b, opening_execution=<user_a's execution>)`
+        succeeded, and `for_user(user_b)` then surfaced user_a's execution data through
+        `entry.opening_execution`.
+
+        Fixed once, here, generically — not per model — since the same shape of bug
+        applies to every cross-FK in the schema. Runs on every `save()` call (not just
+        `full_clean()`, which isn't reliably called — see UserManager._create_user's own
+        bug in accounts/models.py). Introspects every ForeignKey (OneToOneField included,
+        it subclasses ForeignKey) whose `related_model` is itself a UserOwned subclass,
+        and compares `user_id` without loading the full related row.
+        """
+        for field in self._meta.get_fields():
+            if not isinstance(field, models.ForeignKey):
+                continue
+            related_model = field.related_model
+            if not (isinstance(related_model, type) and issubclass(related_model, UserOwned)):
+                continue
+            related_id = getattr(self, field.attname)
+            if related_id is None:
+                continue  # nullable FK not set (e.g. Execution.raw_import_row)
+            related_user_id = (
+                related_model.unscoped.filter(pk=related_id)
+                .values_list("user_id", flat=True)
+                .first()
+            )
+            if related_user_id is not None and related_user_id != self.user_id:
+                raise CrossTenantForeignKeyError(
+                    f"{type(self).__name__}.{field.name} (pk={related_id}) belongs to "
+                    f"user_id={related_user_id}, not this row's user_id={self.user_id}."
+                )
 
 
 class ImportBatch(UserOwned):
@@ -214,6 +259,13 @@ class Execution(UserOwned):
             models.CheckConstraint(
                 condition=models.Q(source__in=["manual", "import"]),
                 name="execution_source_valid",
+            ),
+            # contract_multiplier is the P&L multiplier (point value per contract) — a
+            # 0 or negative value would silently corrupt every trade derived from this
+            # fill. Same pattern as quantity/price above; was missing (code review).
+            models.CheckConstraint(
+                condition=models.Q(contract_multiplier__gt=0),
+                name="execution_contract_multiplier_positive",
             ),
         ]
         indexes = [

@@ -10,9 +10,17 @@ by the isolation test.
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from journal.models import Execution, ImportBatch, JournalEntry, RawImportRow, UserOwned
+from journal.models import (
+    CrossTenantForeignKeyError,
+    Execution,
+    ImportBatch,
+    JournalEntry,
+    RawImportRow,
+    UserOwned,
+)
 
 User = get_user_model()
 
@@ -131,6 +139,58 @@ def test_related_manager_still_works_on_a_scoped_parent():
     # The chokepoint itself is unaffected: a direct unscoped query still raises.
     with pytest.raises(RuntimeError):
         ImportBatch.objects.all()
+
+
+@pytest.mark.django_db
+def test_cross_tenant_fk_is_rejected():
+    """
+    Code review, confirmed live: nothing checked that a UserOwned row's FK to another
+    UserOwned row belongs to the same user. Before this fix,
+    JournalEntry.objects.create(user=user_b, opening_execution=<user_a's execution>)
+    succeeded, and for_user(user_b) then surfaced user_a's execution data through
+    entry.opening_execution — a cross-tenant leak through a relation, not a direct
+    query. Fixed once, generically, on UserOwned.save() (journal/models.py) rather than
+    per model, since the same shape of bug applies to every cross-FK in the schema
+    (RawImportRow -> ImportBatch, Execution -> RawImportRow, JournalEntry ->
+    opening_execution). This test covers JournalEntry -> Execution, the case found live;
+    the mechanism is generic and applies uniformly to the others.
+    """
+    user_a = User.objects.create_user(email="f@example.com", password="x")
+    user_b = User.objects.create_user(email="g@example.com", password="x")
+    execution_a = _make_execution(user_a)
+
+    with pytest.raises(CrossTenantForeignKeyError):
+        JournalEntry.objects.create(user=user_b, opening_execution=execution_a)
+
+    # Confirms the leak path specifically: no JournalEntry row was created at all, so
+    # there's nothing left for for_user(user_b) to surface user_a's execution through.
+    assert not JournalEntry.unscoped.filter(opening_execution=execution_a).exists()
+
+
+@pytest.mark.django_db
+def test_execution_contract_multiplier_must_be_positive():
+    """
+    contract_multiplier is the P&L multiplier (point value per contract); 0 or negative
+    would silently corrupt every trade derived from this fill. Missing CheckConstraint,
+    caught in code review — Execution.quantity/price had one in the same Meta.constraints
+    list, contract_multiplier didn't.
+    """
+    user = User.objects.create_user(email="h@example.com", password="x")
+
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            Execution.objects.create(
+                user=user,
+                broker="manual",
+                symbol="AAPL",
+                side=Execution.SIDE_BUY,
+                quantity="1",
+                price="1",
+                contract_multiplier="0",
+                currency="USD",
+                executed_at=timezone.now(),
+                source=Execution.SOURCE_MANUAL,
+            )
 
 
 @pytest.mark.django_db

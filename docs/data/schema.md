@@ -17,7 +17,7 @@ territory per ADR-0003 §5).
 | `id` | `BIGINT` (identity) | no | PK |
 | `email` | `VARCHAR(254)` | no | `USERNAME_FIELD`. Case-insensitive uniqueness via `UNIQUE (lower(email))`, **not** the `CITEXT` extension — ADR-0003 §1 names this as an acceptable substitute. Django's `auth.E003` check doesn't recognize expression-based `UniqueConstraint`s, so it's silenced in `config/settings.py` with a comment; the DB guarantee is unaffected and is *stricter* than what the check looks for. Login (`UserManager.get_by_natural_key`) filters on `.annotate(email_lower=Lower("email")).get(email_lower=value.lower())`, **not** `email__iexact=value` — `__iexact` compiles to `UPPER(email) = UPPER(%s)`, which doesn't match this index and forces a seq scan on every login attempt (verified with `EXPLAIN`, round-2 code review: `iexact` → `Seq Scan on accounts_user`; the `Lower()` annotation → `Index Scan using accounts_user_email_lower_uniq`). |
 | `password` | `VARCHAR(128)` | no | Django PBKDF2 hash |
-| `timezone` | `VARCHAR(64)` | no, default `'UTC'` | IANA name, validated against a cached wrapper around `zoneinfo.available_timezones()` (`accounts.models._available_timezones`, `@functools.lru_cache(maxsize=1)`) at the Python/form layer — uncached, that call re-scans the tzdata directory on every `User.save()`/`full_clean()` (no DB-level check — the set changes with tzdata updates, hence the cache rather than a `CHECK`) |
+| `timezone` | `VARCHAR(64)` | no, default `'UTC'` | IANA name, validated against `accounts.models._AVAILABLE_TIMEZONES` — `frozenset(zoneinfo.available_timezones())` computed once at import time, not re-scanned per call (no DB-level check — the set changes only with a tzdata upgrade + process restart, hence a plain module constant rather than a `CHECK` or a per-call cache). Actually enforced on the only signup path: `UserManager._create_user()` calls `full_clean()` before `save()` — **fixed in code review, round 3**: it previously only constructed and saved the model directly, so `validate_timezone` (a field validator, which only runs via `full_clean()`) never ran; `create_user(timezone="Not/A_Real_Zone")` saved without error. |
 | `base_currency` | `VARCHAR(3)` | no, default `'USD'` | ISO 4217. Display default only; never overrides an amount's own currency column |
 | `trading_rules` | `TEXT` | no, default `''` | The entire "my rules" feature (mvp.md story 5). No versioning — past journal entries' `rules_followed` flags are unaffected by later edits, by construction |
 | `is_active`, `is_staff`, `is_superuser`, `last_login`, `date_joined` | Django defaults | | |
@@ -67,7 +67,7 @@ Immutable by convention (never `UPDATE`d; corrections delete+recreate).
 | `side` | `VARCHAR(4)` | no | `CHECK (side IN ('buy','sell'))` |
 | `quantity` | `NUMERIC(20,10)` | no | `CHECK (quantity > 0)`. Always positive; direction lives in `side` |
 | `price` | `NUMERIC(20,10)` | no | `CHECK (price >= 0)` |
-| `contract_multiplier` | `NUMERIC(20,10)` | no, default 1 | point value per contract, stored per fill so a contract-spec change never rewrites old P&L |
+| `contract_multiplier` | `NUMERIC(20,10)` | no, default 1 | point value per contract, stored per fill so a contract-spec change never rewrites old P&L. `CHECK (contract_multiplier > 0)` — `execution_contract_multiplier_positive`, added round-3 code review: it's the P&L multiplier, so 0 or negative would silently corrupt every derived trade, and `quantity`/`price` in the same constraints list already had this protection while this column didn't |
 | `fees` | `NUMERIC(19,4)` | no, default 0 | total cost of this fill |
 | `currency` | `VARCHAR(3)` | no | ISO 4217, applies to `fees` and derived P&L |
 | `executed_at` | `TIMESTAMPTZ` | no | UTC in DB, rendered in `user.timezone` |
@@ -167,6 +167,25 @@ Verified directly: `user.delete()` still removes the user's `ImportBatch`, `RawI
 `Execution`, and `JournalEntry` rows in one call; `batch.rows.all()` on a
 `.for_user()`-fetched `ImportBatch` works, while `ImportBatch.objects.all()` still raises.
 
+**Cross-tenant FK integrity — added round-3 code review.** `.for_user()` and the hardened
+manager only stop a query from crossing users; they never stopped a *write* from linking two
+rows across users through a FK. Confirmed live before the fix:
+`JournalEntry.objects.create(user=user_b, opening_execution=<user_a's execution>)` succeeded,
+and `for_user(user_b)` then surfaced user_a's execution data through
+`journal_entry.opening_execution` — a leak through a relation, not a direct query, so the
+manager hardening above didn't catch it.
+
+Fixed once, generically, on `UserOwned.save()` rather than per model, since the same shape of
+bug applies to every cross-FK in the schema (`RawImportRow.import_batch`,
+`Execution.raw_import_row`, `JournalEntry.opening_execution`). `save()` introspects
+`self._meta.get_fields()` for every `ForeignKey` (`OneToOneField` included — it's a `ForeignKey`
+subclass) whose `related_model` is itself a `UserOwned` subclass, fetches only that related
+row's `user_id` via `.unscoped` (a `.values_list("user_id", flat=True)` lookup, not a full-row
+fetch), and raises `CrossTenantForeignKeyError` (a `ValueError` subclass) if it doesn't match
+`self.user_id`. Runs on every `save()` call, not just `full_clean()` — `full_clean()` isn't
+reliably called (see `accounts_user.timezone` above for exactly that failure mode on a
+different model). Nullable cross-FKs (`Execution.raw_import_row`) are skipped when unset.
+
 RLS is not enabled (ADR-0002's trigger — before any non-author account exists — hasn't fired).
 Every table already carries the plain `user_id` column a policy would need, so enabling it
 later is additive DDL, no migration of existing columns.
@@ -187,6 +206,11 @@ Verified in `journal/tests.py`:
   model, calls `user.delete()`, and asserts zero rows remain across all of them — a persisted
   test for the "one statement" account-deletion invariant that was previously only checked by
   a manual script and a code comment.
+- `test_cross_tenant_fk_is_rejected` asserts `CrossTenantForeignKeyError` on the exact
+  `JournalEntry`/`opening_execution` scenario confirmed live above, and that no row was
+  created at all.
+- `test_execution_contract_multiplier_must_be_positive` asserts `IntegrityError` on
+  `contract_multiplier=0`.
 
 ## Money / quantity / time — confirmed as built
 

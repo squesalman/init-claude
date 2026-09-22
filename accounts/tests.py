@@ -8,6 +8,7 @@ once; tests here are what keeps it fixed.
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
 User = get_user_model()
@@ -34,6 +35,22 @@ def test_get_by_natural_key_is_case_insensitive():
 
 
 @pytest.mark.django_db
+def test_create_user_rejects_invalid_timezone():
+    """
+    Code review, confirmed live: create_user()/create_superuser() (the only signup
+    path) never called full_clean(), so validate_timezone on the `timezone` field never
+    ran — create_user(timezone="Not/A_Real_Zone") saved without error. Fixed by calling
+    full_clean() in _create_user() before save().
+    """
+    with pytest.raises(ValidationError):
+        User.objects.create_user(
+            email="badtz@example.com", password="x", timezone="Not/A_Real_Zone"
+        )
+
+    assert not User.objects.filter(email="badtz@example.com").exists()
+
+
+@pytest.mark.django_db
 def test_get_by_natural_key_does_not_match_a_different_email():
     User.objects.create_user(email="foo@example.com", password="x")
 
@@ -45,11 +62,29 @@ def test_get_by_natural_key_does_not_match_a_different_email():
 def test_email_uniqueness_is_case_insensitive_at_db_level():
     """
     The DB constraint (accounts_user_email_lower_uniq, a UNIQUE index on lower(email))
-    is what get_by_natural_key's __iexact lookup relies on to ever return at most one
-    row. Prove it actually rejects a case-variant duplicate, not just a literal one.
+    is what get_by_natural_key's lookup relies on to ever return at most one row. Prove
+    the constraint itself rejects a case-variant duplicate, not just that create_user()
+    happens to catch it — so this bypasses full_clean() (create_user() now calls it,
+    which catches the same violation earlier as ValidationError; see the test below) and
+    saves directly, the way any write path that skips full_clean() would.
     """
     User.objects.create_user(email="Foo@Example.com", password="x")
 
     with pytest.raises(IntegrityError):
         with transaction.atomic():
-            User.objects.create_user(email="foo@example.com", password="y")
+            duplicate = User(email="foo@example.com")
+            duplicate.set_password("y")
+            duplicate.save()  # deliberately not full_clean() — see docstring
+
+
+@pytest.mark.django_db
+def test_create_user_rejects_case_variant_duplicate_email_via_full_clean():
+    """
+    Companion to the DB-level test above: create_user()'s normal path (which now calls
+    full_clean(), per the code-review fix below) catches the same violation earlier, as
+    ValidationError, before ever reaching the DB.
+    """
+    User.objects.create_user(email="Bar@Example.com", password="x")
+
+    with pytest.raises(ValidationError):
+        User.objects.create_user(email="bar@example.com", password="y")
