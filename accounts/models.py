@@ -4,6 +4,7 @@ from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import PermissionsMixin
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Value
 from django.db.models.functions import Lower
 
 # Computed once at import time, not re-cached per call: the set of IANA timezone names
@@ -33,8 +34,21 @@ class UserManager(BaseUserManager):
         # doesn't match the UNIQUE index built on lower(email) — a seq scan on every
         # login. Annotating Lower(email) and filtering on the annotation compiles to
         # lower(email) = %s, which the index serves directly.
+        #
+        # Not `email_lower=email.lower()` either (code review, round 7): that lowers the
+        # login input in Python while the DB index and the query annotation both lower
+        # via Postgres's lower() — and those two disagree for non-ASCII characters under
+        # a C/POSIX collation (the default for the postgres:16-alpine image this
+        # project's compose.yaml uses). Confirmed live: lower('İstanbul@example.com') in
+        # Postgres gives 'istanbul@example.com' (20 chars, plain ascii i), while Python's
+        # "İstanbul@example.com".lower() gives 'i̇stanbul@example.com' (21 chars — İ folds
+        # to 'i' + a combining dot above under full Unicode case folding). Those don't
+        # match character-for-character, so a user could fail to log in with the *exact*
+        # email they registered with. Fixed by lowering the login input in SQL too
+        # (`Lower(Value(email))`), so both sides of the comparison go through the same
+        # (Postgres) lowering rules instead of mixing Python and SQL.
         return self.annotate(email_lower=Lower(self.model.USERNAME_FIELD)).get(
-            email_lower=email.lower()
+            email_lower=Lower(Value(email))
         )
 
     def _create_user(self, email: str, password: str | None, **extra_fields):
@@ -56,6 +70,40 @@ class UserManager(BaseUserManager):
         user.full_clean()
         user.save(using=self._db)
         return user
+
+    def get_or_create(self, defaults=None, **kwargs):
+        # Bug (code review, round 7 — same class as round 3's already-fixed one):
+        # Django's default QuerySet.get_or_create()/update_or_create() construct and
+        # save a User directly on the create path, without ever routing through
+        # _create_user() or calling full_clean() — silently bypassing validate_timezone
+        # and every other field validator, just via a different call path than the one
+        # round 3 fixed. Confirmed live: User.objects.get_or_create(email=<new email>,
+        # defaults={"timezone": "Not/A_Real_Zone"}) succeeded. Fixed by routing the
+        # create path through _create_user(), same as create_user() does — not
+        # reimplementing Django's own get_or_create merge/save logic.
+        try:
+            return self.get(**kwargs), False
+        except self.model.DoesNotExist:
+            params = {**kwargs, **(defaults or {})}
+            password = params.pop("password", None)
+            email = params.pop(self.model.USERNAME_FIELD, None)
+            return self._create_user(email, password, **params), True
+
+    def update_or_create(self, defaults=None, create_defaults=None, **kwargs):
+        defaults = defaults or {}
+        create_defaults = defaults if create_defaults is None else create_defaults
+        try:
+            user = self.get(**kwargs)
+        except self.model.DoesNotExist:
+            params = {**kwargs, **create_defaults}
+            password = params.pop("password", None)
+            email = params.pop(self.model.USERNAME_FIELD, None)
+            return self._create_user(email, password, **params), True
+        for field, value in defaults.items():
+            setattr(user, field, value)
+        user.full_clean()
+        user.save(using=self._db)
+        return user, False
 
     def create_user(self, email: str, password: str | None = None, **extra_fields):
         extra_fields.setdefault("is_staff", False)

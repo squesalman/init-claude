@@ -26,18 +26,41 @@ class UserScopedManager(models.Manager):
     explicitly as a kwarg), and blocking it would break the ordinary
     `Model.objects.create(user=..., ...)` idiom used throughout the app and its tests.
 
-    `get_or_create()`/`update_or_create()` need more than that exemption, though (round-6
-    code review — round 5's bypass reintroduced a cross-tenant leak): their *lookup*
-    kwargs, not just `defaults`, determine which existing row (if any) gets returned, and
-    `defaults` is only applied on create. Confirmed live:
-    `Execution.objects.get_or_create(broker="topstep", broker_execution_id="SHARED1",
-    defaults=dict(user=user_b, ...))` — `user` only in `defaults`, not the lookup —
-    returned user_a's existing matching row with `created=False`, handing user_b user_a's
-    execution. No `save()` ever ran on that path, so `UserOwned.save()`'s cross-tenant FK
-    guard never got a chance to fire. Fixed by requiring `user=` in the top-level lookup
-    kwargs (raises `ValueError` otherwise) and asserting the returned row's `user_id`
-    matches afterward (raises `CrossTenantForeignKeyError` if it somehow doesn't — belt
-    and suspenders, since the lookup requirement should already make this unreachable).
+    `get_or_create()`/`update_or_create()` need more than that exemption, though — this
+    took three rounds of code review to get actually right:
+
+    - **Round 6**: their *lookup* kwargs, not just `defaults`, determine which existing
+      row (if any) gets returned, and `defaults` is only applied on create. Confirmed
+      live: `Execution.objects.get_or_create(broker="topstep",
+      broker_execution_id="SHARED1", defaults=dict(user=user_b, ...))` — `user` only in
+      `defaults`, not the lookup — returned user_a's existing matching row with
+      `created=False`, handing user_b user_a's execution. Fixed (at the time) by
+      requiring `user=` in the top-level lookup kwargs, plus an after-the-fact assert on
+      the returned row.
+    - **Round 7, addendum**: that "require + check after" fix was still insufficient.
+      Confirmed live: `Execution.objects.get_or_create(user=user_a, broker="topstep",
+      broker_execution_id="X1", defaults=dict(user=user_b, ...))`, with *no* existing
+      match — Django's own `get_or_create()` lets `defaults["user"]` override the
+      lookup kwargs' `user` when building the row to create, so it **commits** with
+      `user_id=user_b.pk` inside Django's own transaction, and only *then* does the
+      after-the-fact check run and raise. Too late — confirmed the leaked row existed
+      via `Execution.unscoped.filter(...)` even though the call raised. Fixed by
+      validating **before** calling `super().get_queryset().get_or_create()`/
+      `update_or_create()` at all: if `defaults` (or `create_defaults`) contains
+      `"user"`/`"user_id"`, it must match the lookup kwargs' value exactly, or this
+      raises `ValueError` immediately and Django's own get_or_create machinery never
+      runs — nothing commits. `defaults` omitting `user`/`user_id` entirely is fine (it
+      just inherits from the lookup params, which was already safe).
+    - Also **round 7** (not the leak, a usability bug in round 6's own fix): the
+      lookup-kwarg requirement originally only accepted the literal key `"user"`,
+      incorrectly rejecting the equally valid `user_id=` shape — failed closed (no
+      leak), but blocked a legitimate call. Both methods now accept `user=` or
+      `user_id=` throughout.
+
+    The after-the-fact `_assert_belongs_to_user` check (round 6) is kept as a second,
+    redundant layer on top of the pre-check — cheap, and it's the thing that would catch
+    any *other* way `defaults` could end up producing a mismatched row that nobody has
+    found yet.
     """
 
     def get_queryset(self):
@@ -55,29 +78,62 @@ class UserScopedManager(models.Manager):
 
     def get_or_create(self, defaults=None, **kwargs):
         self._require_user_in_lookup_kwargs("get_or_create", kwargs)
+        self._require_defaults_user_consistent("get_or_create", kwargs, defaults)
         obj, created = super().get_queryset().get_or_create(defaults=defaults, **kwargs)
-        self._assert_belongs_to_user(obj, kwargs["user"])
+        self._assert_belongs_to_user(obj, kwargs.get("user", kwargs.get("user_id")))
         return obj, created
 
     def update_or_create(self, defaults=None, create_defaults=None, **kwargs):
         self._require_user_in_lookup_kwargs("update_or_create", kwargs)
+        self._require_defaults_user_consistent("update_or_create", kwargs, defaults)
+        self._require_defaults_user_consistent("update_or_create", kwargs, create_defaults)
         # create_defaults is Django 5.0+; kwargs shape is identical to get_or_create's
         # otherwise, so no separate comment needed beyond the class docstring above.
         obj, created = super().get_queryset().update_or_create(
             defaults=defaults, create_defaults=create_defaults, **kwargs
         )
-        self._assert_belongs_to_user(obj, kwargs["user"])
+        self._assert_belongs_to_user(obj, kwargs.get("user", kwargs.get("user_id")))
         return obj, created
 
     @staticmethod
     def _require_user_in_lookup_kwargs(method_name, kwargs):
-        if "user" not in kwargs:
+        # Accepts either `user=` or `user_id=` (round-7 code review: the original only
+        # checked the literal key "user", incorrectly rejecting the equally valid
+        # `user_id=` lookup kwarg — failed closed, so no leak, but blocked a legitimate
+        # call shape).
+        if "user" not in kwargs and "user_id" not in kwargs:
             raise ValueError(
-                f"{method_name}() on a UserOwned model requires `user=` in the "
-                "top-level lookup kwargs, not only inside `defaults=` — otherwise the "
-                "lookup can match (and return) another user's row before `defaults` is "
-                "ever applied. See UserScopedManager's docstring."
+                f"{method_name}() on a UserOwned model requires `user=` or `user_id=` "
+                "in the top-level lookup kwargs, not only inside `defaults=` — "
+                "otherwise the lookup can match (and return) another user's row before "
+                "`defaults` is ever applied. See UserScopedManager's docstring."
             )
+
+    @staticmethod
+    def _require_defaults_user_consistent(method_name, kwargs, defaults):
+        # Round-7 addendum: the real fix for the leak. `defaults` (or `create_defaults`)
+        # is allowed to omit user/user_id entirely — it then just inherits the lookup
+        # kwargs' value, which is safe. But if it *does* specify one, it must agree with
+        # the lookup kwargs, checked BEFORE calling Django's own get_or_create/
+        # update_or_create — because Django lets defaults override the lookup value when
+        # building the row to create, so a conflicting defaults["user"] would otherwise
+        # commit a cross-tenant row before any after-the-fact check ever runs.
+        if not defaults:
+            return
+        lookup_value = kwargs.get("user", kwargs.get("user_id"))
+        lookup_user_id = getattr(lookup_value, "pk", lookup_value)
+        for key in ("user", "user_id"):
+            if key not in defaults:
+                continue
+            defaults_user_id = getattr(defaults[key], "pk", defaults[key])
+            if defaults_user_id != lookup_user_id:
+                raise ValueError(
+                    f"{method_name}(): defaults[{key!r}]={defaults_user_id!r} conflicts "
+                    f"with the lookup kwargs' user ({lookup_user_id!r}). Refusing before "
+                    "calling Django's own get_or_create()/update_or_create(), since "
+                    "defaults can override the lookup value when creating a new row — "
+                    "checking only after the call would be too late."
+                )
 
     @staticmethod
     def _assert_belongs_to_user(obj, user):
@@ -90,7 +146,16 @@ class UserScopedManager(models.Manager):
 
 
 class CrossTenantForeignKeyError(ValueError):
-    """Raised when a UserOwned row's FK to another UserOwned row crosses users."""
+    """
+    Raised when a UserOwned row's FK to another UserOwned row crosses users.
+
+    Note for whoever builds the edit forms later (round-7 addendum): this is raised only
+    inside `save()`, so Django's `ModelForm.is_valid()`/`full_clean()` machinery won't
+    catch it — a form-based edit that ends up with a cross-tenant-mismatched instance
+    would surface this as an unhandled 500, not a graceful form error. No form code
+    exists yet in this PR, so nothing is built for that here; view/form code should
+    explicitly catch this and translate it into a validation error when it's written.
+    """
 
 
 class UserOwned(models.Model):
@@ -211,6 +276,14 @@ class UserOwned(models.Model):
         (round-5 and round-6 code review, both declined for the same reason); documented
         here instead of overclaiming uniform coverage.
         """
+        if self.user_id is None:
+            # Round-7 code review: without this guard, a row saved without `user=` set
+            # would compare a guarded FK's real owner against `self.user_id=None`,
+            # raising a misleading CrossTenantForeignKeyError ("belongs to user_id=5,
+            # not this row's user_id=None") instead of ever reaching the DB's own,
+            # correct NOT NULL violation on `user_id`. Let that real constraint surface
+            # instead — this check has nothing meaningful to compare against yet.
+            return
         for field in self._guarded_fk_fields():
             related_id = getattr(self, field.attname)
             if related_id is None:
@@ -381,7 +454,12 @@ class Execution(UserOwned):
             # and settled negative in real markets — WTI crude (CL) settled around
             # -$37.63 on 2020-04-20 — and this app targets futures brokers (Topstep).
             # `quantity > 0` above is still correct; direction lives in `side`, not
-            # price's sign.
+            # price's sign. That evidence doesn't extend to price=0, though (round-7
+            # code review): $0 is essentially never a valid fill price and is almost
+            # certainly malformed data, unlike a real negative settlement.
+            models.CheckConstraint(
+                condition=~models.Q(price=0), name="execution_price_not_zero"
+            ),
             models.CheckConstraint(
                 condition=models.Q(source__in=["manual", "import"]),
                 name="execution_source_valid",

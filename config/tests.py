@@ -65,3 +65,32 @@ def test_secret_key_from_env_used_when_debug_false():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_secret_key_rejects_the_env_example_placeholder_when_debug_false():
+    """
+    Round-7 addendum: emptiness isn't the only bad value. .env.example ships
+    DJANGO_SECRET_KEY=CHANGE-ME-run-get_random_secret_key, which looks like a real value
+    someone might miss updating when copying .env.example to .env. If ops sets
+    DEBUG=false and never touches that line, the app must not silently boot in
+    "production mode" using a key that's public in this repo's git history.
+    """
+    result = _run_check(
+        DJANGO_DEBUG="false",
+        DJANGO_SECRET_KEY="CHANGE-ME-run-get_random_secret_key",
+    )
+
+    assert result.returncode != 0
+    assert "ImproperlyConfigured" in result.stderr
+    assert "DJANGO_SECRET_KEY" in result.stderr
+
+
+def test_secret_key_placeholder_falls_back_to_dev_default_when_debug_true():
+    """The placeholder rejection is DEBUG=False-only, same as the empty-value check —
+    dev (DEBUG=true) still works even if .env.example's line is used unmodified."""
+    result = _run_check(
+        DJANGO_DEBUG="true",
+        DJANGO_SECRET_KEY="CHANGE-ME-run-get_random_secret_key",
+    )
+
+    assert result.returncode == 0, result.stderr

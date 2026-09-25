@@ -88,3 +88,85 @@ def test_create_user_rejects_case_variant_duplicate_email_via_full_clean():
 
     with pytest.raises(ValidationError):
         User.objects.create_user(email="bar@example.com", password="y")
+
+
+@pytest.mark.django_db
+def test_get_or_create_rejects_invalid_timezone():
+    """
+    Round-7 code review, same class of bug as round 3's already-fixed one: Django's
+    default QuerySet.get_or_create()/update_or_create() construct and save a User
+    directly on the create path without ever routing through _create_user() or calling
+    full_clean() — silently bypassing validate_timezone via a different call path than
+    the one round 3 fixed. Confirmed live: User.objects.get_or_create(email=<new email>,
+    defaults={"timezone": "Not/A_Real_Zone"}) succeeded. Fixed by routing the create path
+    through _create_user(), same as create_user() does.
+    """
+    with pytest.raises(ValidationError):
+        User.objects.get_or_create(
+            email="badtz-goc@example.com",
+            defaults={"password": "x", "timezone": "Not/A_Real_Zone"},
+        )
+
+    assert not User.objects.filter(email="badtz-goc@example.com").exists()
+
+
+@pytest.mark.django_db
+def test_get_or_create_returns_existing_user_without_recreating():
+    """Sanity check alongside the test above: the normal, valid-input path still works —
+    get_or_create() isn't just blocked outright, only unvalidated creation is."""
+    existing = User.objects.create_user(email="goc@example.com", password="x")
+
+    user, created = User.objects.get_or_create(
+        email="goc@example.com", defaults={"password": "y"}
+    )
+    assert not created
+    assert user.pk == existing.pk
+
+
+@pytest.mark.django_db
+def test_update_or_create_rejects_invalid_timezone_on_create_path():
+    """update_or_create()'s create path has the same bug shape as get_or_create()'s."""
+    with pytest.raises(ValidationError):
+        User.objects.update_or_create(
+            email="badtz-uoc@example.com",
+            defaults={"password": "x", "timezone": "Not/A_Real_Zone"},
+        )
+
+    assert not User.objects.filter(email="badtz-uoc@example.com").exists()
+
+
+@pytest.mark.django_db
+def test_update_or_create_rejects_invalid_timezone_on_update_path():
+    """And the update path: applying defaults to an existing row must also run
+    full_clean() before saving, not just the create path."""
+    User.objects.create_user(email="uoc@example.com", password="x")
+
+    with pytest.raises(ValidationError):
+        User.objects.update_or_create(
+            email="uoc@example.com", defaults={"timezone": "Not/A_Real_Zone"}
+        )
+
+
+@pytest.mark.django_db
+def test_get_by_natural_key_case_folding_is_db_side_not_python():
+    """
+    Round-7 code review: get_by_natural_key lowercased the login input with Python's
+    str.lower(), while the DB unique index and the query-side annotation both use
+    Postgres's lower(). These disagree for non-ASCII characters under a C/POSIX
+    collation (the default for the postgres:16-alpine image compose.yaml uses).
+    Confirmed live: Postgres's lower('İstanbul@example.com') gives
+    'istanbul@example.com' (20 chars, plain ascii i), while Python's
+    "İstanbul@example.com".lower() gives 'i̇stanbul@example.com' (21 chars — İ, U+0130,
+    folds to 'i' + a combining dot above under Python's full Unicode case folding). Those
+    don't match character-for-character, so under the old code a user could fail to log
+    in with the *exact* email they registered with. Fixed by lowering the login input in
+    SQL too (Lower(Value(email))), so both sides go through the same (Postgres) rules.
+    """
+    email = "İstanbul@example.com"
+    user = User(email=email)
+    user.set_password("x")
+    user.save()  # bypass full_clean(): EmailValidator's local-part regex is ASCII-only,
+    # unrelated to the lowering-consistency bug this test targets
+
+    found = User.objects.get_by_natural_key(email)
+    assert found.pk == user.pk

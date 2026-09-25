@@ -346,6 +346,145 @@ def test_get_or_create_with_user_only_in_defaults_is_rejected():
 
 
 @pytest.mark.django_db
+def test_get_or_create_with_conflicting_defaults_user_does_not_commit():
+    """
+    Round-7 addendum: round 6's "require user= in lookup kwargs + check after" fix was
+    still insufficient. Confirmed live: Execution.objects.get_or_create(user=user_a,
+    broker="topstep", broker_execution_id="X1", defaults=dict(user=user_b, ...)), with
+    *no* existing match — Django's own get_or_create() lets defaults["user"] override
+    the lookup kwargs' user when building the row to create, so it COMMITS with
+    user_id=user_b.pk inside Django's own transaction, and only then does the
+    after-the-fact check run and raise — too late, the row already existed (confirmed via
+    Execution.unscoped.filter(...) showing the leaked row despite the raise). Fixed by
+    validating before calling Django's own get_or_create()/update_or_create() at all: a
+    conflicting defaults["user"]/["user_id"] now raises immediately, and nothing commits.
+    """
+    user_a = User.objects.create_user(email="aa@example.com", password="x")
+    user_b = User.objects.create_user(email="bb@example.com", password="x")
+
+    with pytest.raises(ValueError):
+        Execution.objects.get_or_create(
+            user=user_a,
+            broker="topstep",
+            broker_execution_id="X1",
+            defaults=dict(
+                user=user_b,
+                symbol="MNQZ5",
+                side=Execution.SIDE_BUY,
+                quantity="1",
+                price="1",
+                currency="USD",
+                executed_at=timezone.now(),
+                source=Execution.SOURCE_IMPORT,
+            ),
+        )
+
+    # Nothing committed at all, for either user — the row must not exist even briefly.
+    assert not Execution.unscoped.filter(
+        broker="topstep", broker_execution_id="X1"
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_get_or_create_defaults_user_matching_lookup_is_fine():
+    """
+    Companion to the test above: defaults specifying user/user_id is only a problem when
+    it *conflicts* with the lookup kwargs. Specifying the same user in both is a normal,
+    harmless call shape and must keep working.
+    """
+    user = User.objects.create_user(email="cc@example.com", password="x")
+
+    execution, created = Execution.objects.get_or_create(
+        user=user,
+        broker="topstep",
+        broker_execution_id="X3",
+        defaults=dict(
+            user=user,  # same user, redundant but not conflicting
+            symbol="MNQZ5",
+            side=Execution.SIDE_BUY,
+            quantity="1",
+            price="1",
+            currency="USD",
+            executed_at=timezone.now(),
+            source=Execution.SOURCE_IMPORT,
+        ),
+    )
+    assert created
+    assert execution.user_id == user.pk
+
+
+@pytest.mark.django_db
+def test_get_or_create_accepts_user_id_lookup_kwarg():
+    """
+    Round-7 code review: _require_user_in_lookup_kwargs originally only checked for the
+    literal key "user", incorrectly rejecting the equally valid user_id= lookup kwarg on
+    get_or_create/update_or_create — failed closed (no leak), but blocked a legitimate
+    call shape.
+    """
+    user = User.objects.create_user(email="dd@example.com", password="x")
+
+    execution, created = Execution.objects.get_or_create(
+        user_id=user.pk,
+        broker="topstep",
+        broker_execution_id="X4",
+        defaults=dict(
+            symbol="MNQZ5",
+            side=Execution.SIDE_BUY,
+            quantity="1",
+            price="1",
+            currency="USD",
+            executed_at=timezone.now(),
+            source=Execution.SOURCE_IMPORT,
+        ),
+    )
+    assert created
+    assert execution.user_id == user.pk
+
+
+@pytest.mark.django_db
+def test_cross_tenant_check_skipped_when_user_id_is_none_lets_real_not_null_surface():
+    """
+    Round-7 code review: without a self.user_id is None guard, a row saved without
+    user= set would compare a guarded FK's real owner against self.user_id=None, raising
+    a misleading CrossTenantForeignKeyError ("belongs to user_id=5, not this row's
+    user_id=None") instead of the DB's own, correct NOT NULL violation on user_id.
+    """
+    user = User.objects.create_user(email="ee@example.com", password="x")
+    execution = _make_execution(user)
+
+    with pytest.raises(IntegrityError) as excinfo:
+        JournalEntry(opening_execution=execution).save()
+
+    assert "user_id" in str(excinfo.value)
+    assert not issubclass(excinfo.type, CrossTenantForeignKeyError)
+
+
+@pytest.mark.django_db
+def test_execution_price_zero_rejected():
+    """
+    Round-7 code review: round 6 removed execution_price_nonnegative because negative
+    settlement prices are real (WTI 2020-04-20), but that evidence doesn't extend to
+    price=0 — $0 is essentially never a valid fill price and is almost certainly
+    malformed data, unlike a real negative settlement.
+    """
+    user = User.objects.create_user(email="ff@example.com", password="x")
+
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            Execution.objects.create(
+                user=user,
+                broker="manual",
+                symbol="AAPL",
+                side=Execution.SIDE_BUY,
+                quantity="1",
+                price="0",
+                currency="USD",
+                executed_at=timezone.now(),
+                source=Execution.SOURCE_MANUAL,
+            )
+
+
+@pytest.mark.django_db
 def test_journalentry_risk_currency_blank_rejected_when_amount_set():
     """
     Round-5 code review: the CHECK constraint only tested risk_currency__isnull, so

@@ -35,16 +35,27 @@ DEBUG = os.environ.get('DJANGO_DEBUG', 'false').lower() == 'true'
 # silently boot with a key anyone reading this public repo can use to forge sessions,
 # CSRF tokens, and password-reset tokens. The dev fallback is now only used when
 # DEBUG=True; a real deployment (DEBUG=False) with no DJANGO_SECRET_KEY refuses to start.
+#
+# Round-7 addendum: emptiness isn't the only bad value. .env.example ships a placeholder
+# (DJANGO_SECRET_KEY=...) that LOOKS like a real value someone might miss updating when
+# copying .env.example to .env — the check above only catches it being unset entirely. If
+# ops sets DEBUG=false and never touches that line, the app would boot in "production
+# mode" using a key that's public in this repo's git history. Reject that exact known
+# placeholder too, with the same fail-closed philosophy as the empty-value check.
+_ENV_EXAMPLE_PLACEHOLDER_SECRET_KEY = 'CHANGE-ME-run-get_random_secret_key'
+
 _secret_key = os.environ.get('DJANGO_SECRET_KEY')
-if not _secret_key:
+if not _secret_key or _secret_key == _ENV_EXAMPLE_PLACEHOLDER_SECRET_KEY:
     if DEBUG:
         # ponytail: dev-only fallback so `runserver`/tests work with zero setup; prod
         # sets DJANGO_SECRET_KEY via the VPS .env per ADR-0002 and must not use this.
         _secret_key = 'django-insecure-hx4@t%@gbhr)_sk5)rregy-%b$#z50r0vonm0k5=s^4s-mh)g@'
     else:
         raise ImproperlyConfigured(
-            'DJANGO_SECRET_KEY must be set when DEBUG is False. Refusing to start with '
-            'the public dev fallback key on what looks like a real deployment.'
+            'DJANGO_SECRET_KEY must be set to a real secret when DEBUG is False — it is '
+            'either unset or still the .env.example placeholder value. Refusing to start '
+            'with the public dev fallback key (or an equally public placeholder) on what '
+            'looks like a real deployment.'
         )
 SECRET_KEY = _secret_key
 

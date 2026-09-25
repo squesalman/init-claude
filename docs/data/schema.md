@@ -15,7 +15,7 @@ territory per ADR-0003 §5).
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
 | `id` | `BIGINT` (identity) | no | PK |
-| `email` | `VARCHAR(254)` | no | `254` is `EmailField`'s own built-in default, not an explicit `max_length=` on the field (**round-6 cleanup**: dropped an explicit `max_length=254` that just restated Django's default — `makemigrations` confirms no schema change resulted). `USERNAME_FIELD`. Case-insensitive uniqueness via `UNIQUE (lower(email))`, **not** the `CITEXT` extension — ADR-0003 §1 names this as an acceptable substitute. Django's `auth.E003` check doesn't recognize expression-based `UniqueConstraint`s, so it's silenced in `config/settings.py` with a comment; the DB guarantee is unaffected and is *stricter* than what the check looks for. Login (`UserManager.get_by_natural_key`) filters on `.annotate(email_lower=Lower("email")).get(email_lower=value.lower())`, **not** `email__iexact=value` — `__iexact` compiles to `UPPER(email) = UPPER(%s)`, which doesn't match this index and forces a seq scan on every login attempt (verified with `EXPLAIN`, round-2 code review: `iexact` → `Seq Scan on accounts_user`; the `Lower()` annotation → `Index Scan using accounts_user_email_lower_uniq`). `UserManager._create_user()`'s missing-email guard raises `ValidationError`, not `ValueError` (**round-4 code review**, for consistency — every other invalid-field case in `_create_user()` is caught via `full_clean()` and raises `ValidationError`; a caller only needs to catch one exception type). |
+| `email` | `VARCHAR(254)` | no | `254` is `EmailField`'s own built-in default, not an explicit `max_length=` on the field (**round-6 cleanup**: dropped an explicit `max_length=254` that just restated Django's default — `makemigrations` confirms no schema change resulted). `USERNAME_FIELD`. Case-insensitive uniqueness via `UNIQUE (lower(email))`, **not** the `CITEXT` extension — ADR-0003 §1 names this as an acceptable substitute. Django's `auth.E003` check doesn't recognize expression-based `UniqueConstraint`s, so it's silenced in `config/settings.py` with a comment; the DB guarantee is unaffected and is *stricter* than what the check looks for. Login (`UserManager.get_by_natural_key`) filters on `.annotate(email_lower=Lower("email")).get(email_lower=Lower(Value(raw_email)))`, **not** `email__iexact=value` — `__iexact` compiles to `UPPER(email) = UPPER(%s)`, which doesn't match this index and forces a seq scan on every login attempt (verified with `EXPLAIN`, round-2 code review: `iexact` → `Seq Scan on accounts_user`; the `Lower()` annotation → `Index Scan using accounts_user_email_lower_uniq`). **Also not** `email_lower=email.lower()` (round-7 code review — that was this method's shape between rounds 2 and 7): lowering the login input in *Python* while the index and the annotation both lower in *SQL* disagrees for non-ASCII characters under a C/POSIX collation (the default for the `postgres:16-alpine` image `compose.yaml` uses). Confirmed live: Postgres's `lower('İstanbul@example.com')` gives `'istanbul@example.com'` (20 chars, plain ASCII `i`), while Python's `"İstanbul@example.com".lower()` gives `'i̇stanbul@example.com'` (21 chars — `İ`, U+0130, folds to `i` + a combining dot above under Python's full Unicode case folding). These don't match character-for-character, so a user could fail to log in with the *exact* email they registered with. Fixed by lowering the login input in SQL too (`Lower(Value(email))`), so both sides of the comparison go through the same (Postgres) lowering rules instead of mixing Python and SQL. `UserManager._create_user()`'s missing-email guard raises `ValidationError`, not `ValueError` (**round-4 code review**, for consistency — every other invalid-field case in `_create_user()` is caught via `full_clean()` and raises `ValidationError`; a caller only needs to catch one exception type). **`get_or_create()`/`update_or_create()` are also overridden on `UserManager`** (round-7 code review, same bug class as round 3's `create_user()` fix): Django's default implementations construct-and-save a `User` directly on the create path without ever calling `full_clean()`, silently bypassing `validate_timezone` and every other field validator via a different call path than `create_user()`'s. Confirmed live: `User.objects.get_or_create(email=<new>, defaults={"timezone": "Not/A_Real_Zone"})` succeeded. Both overrides route creation through `_create_user()`; `update_or_create()`'s update-existing-row path also calls `full_clean()` before saving. |
 | `password` | `VARCHAR(128)` | no | Django PBKDF2 hash |
 | `timezone` | `VARCHAR(64)` | no, default `'UTC'` | IANA name, validated against `accounts.models._AVAILABLE_TIMEZONES` — `frozenset(zoneinfo.available_timezones())` computed once at import time, not re-scanned per call (no DB-level check — the set changes only with a tzdata upgrade + process restart, hence a plain module constant rather than a `CHECK` or a per-call cache). Actually enforced on the only signup path: `UserManager._create_user()` calls `full_clean()` before `save()` — **fixed in code review, round 3**: it previously only constructed and saved the model directly, so `validate_timezone` (a field validator, which only runs via `full_clean()`) never ran; `create_user(timezone="Not/A_Real_Zone")` saved without error. |
 | `base_currency` | `VARCHAR(3)` | no, default `'USD'` | ISO 4217. Display default only; never overrides an amount's own currency column |
@@ -66,7 +66,7 @@ Immutable by convention (never `UPDATE`d; corrections delete+recreate).
 | `symbol` | `VARCHAR(32)` | no | uppercased, as broker wrote it |
 | `side` | `VARCHAR(4)` | no | `CHECK (side IN ('buy','sell'))` |
 | `quantity` | `NUMERIC(20,10)` | no | `CHECK (quantity > 0)`. Always positive; direction lives in `side` |
-| `price` | `NUMERIC(20,10)` | no | No non-negative `CHECK`. **Removed round-6 code review** (was `CHECK (price >= 0)` — `execution_price_nonnegative`): futures have traded/settled negative in real markets (WTI crude, CL, settled around -$37.63 on 2020-04-20), and this app targets futures brokers (Topstep). `quantity > 0` below is still correct and unaffected — direction lives in `side`, not price's sign |
+| `price` | `NUMERIC(20,10)` | no | No non-negative `CHECK`. **Removed round-6 code review** (was `CHECK (price >= 0)` — `execution_price_nonnegative`): futures have traded/settled negative in real markets (WTI crude, CL, settled around -$37.63 on 2020-04-20), and this app targets futures brokers (Topstep). `quantity > 0` below is still correct and unaffected — direction lives in `side`, not price's sign. `CHECK (price <> 0)` — `execution_price_not_zero`, **added round-7 code review**: that same negative-price evidence doesn't extend to `price = 0` — $0 is essentially never a valid fill price and is almost certainly malformed data, unlike a real negative settlement |
 | `contract_multiplier` | `NUMERIC(20,10)` | no, default 1 | point value per contract, stored per fill so a contract-spec change never rewrites old P&L. `CHECK (contract_multiplier > 0)` — `execution_contract_multiplier_positive`, added round-3 code review: it's the P&L multiplier, so 0 or negative would silently corrupt every derived trade, and `quantity`/`price` in the same constraints list already had this protection while this column didn't |
 | `fees` | `NUMERIC(19,4)` | no, default 0 | total cost of this fill |
 | `currency` | `VARCHAR(3)` | no | ISO 4217, applies to `fees` and derived P&L. `CHECK (currency <> '')` — `execution_currency_not_blank`, added round-5 code review: unlike `quantity`/`price`/`contract_multiplier` in the same constraints list, `currency` had no non-empty guard at all (no `CheckConstraint`, no `full_clean()` call site on this write path), so a money-bearing execution could be saved with `currency=""`, silently violating CLAUDE.md's "store currency with every amount" |
@@ -158,8 +158,8 @@ separately exempted on the manager. `.create()` is unconditionally safe — it i
 can't leak (the `user` FK is `NOT NULL` and always passed explicitly as a kwarg), so blocking
 it would break the ordinary `Model.objects.create(user=..., ...)` idiom.
 
-`get_or_create`/`update_or_create` are **not** unconditionally safe, and took two rounds to
-get right:
+`get_or_create`/`update_or_create` are **not** unconditionally safe, and took four rounds to
+get right — the leak vector kept moving:
 
 - **Round-5**: missed in the original hardening — they proxied through the raising
   `get_queryset()`, contradicting the manager's own docstring claim that `.create()` was the
@@ -171,13 +171,31 @@ get right:
   broker_execution_id="SHARED1", defaults=dict(user=user_b, ...))`, with `user` only in
   `defaults`, returned user_a's existing matching row with `created=False`, handing user_b
   user_a's execution — no `save()` ever ran on that path, so `UserOwned.save()`'s
-  cross-tenant FK guard never fired. Fixed by requiring `user=` in the top-level lookup
-  kwargs (raises `ValueError` if it's missing or only in `defaults`) and asserting the
-  returned row's `user_id` matches afterward (raises `CrossTenantForeignKeyError` as a
-  belt-and-suspenders check, since the lookup requirement should already make a mismatch
-  unreachable). The natural, now-safe importer call:
-  `Execution.objects.get_or_create(user=..., broker=..., broker_execution_id=...,
-  defaults={...})`.
+  cross-tenant FK guard never fired. Fixed (at the time) by requiring `user=` in the
+  top-level lookup kwargs, plus an after-the-fact assert on the returned row.
+- **Round-7 addendum**: that "require + check after" fix was still insufficient — confirmed
+  live with a variant that has no existing match at all:
+  `Execution.objects.get_or_create(user=user_a, broker="topstep",
+  broker_execution_id="X1", defaults=dict(user=user_b, ...))`. Django's own `get_or_create()`
+  lets `defaults["user"]` override the lookup kwargs' `user` when building the row to
+  create, so it **commits** with `user_id=user_b.pk` inside Django's own transaction, and
+  only *then* does the after-the-fact check run and raise — too late; confirmed the leaked
+  row existed via `Execution.unscoped.filter(...)` even though the call raised. **Fixed by
+  validating before calling Django's own `get_or_create()`/`update_or_create()` at all**: if
+  `defaults` (or `create_defaults`) specifies `user`/`user_id`, it must match the lookup
+  kwargs' value exactly, or this raises `ValueError` immediately and nothing commits.
+  `defaults` omitting `user`/`user_id` entirely remains fine — it just inherits the lookup
+  value, which was already safe. The after-the-fact assert is kept as a second, redundant
+  layer on top.
+- **Round-7** (a usability bug in round 6's own fix, not the leak): the lookup-kwarg
+  requirement originally only accepted the literal key `"user"`, incorrectly rejecting the
+  equally valid `user_id=` shape — failed closed (no leak), but blocked a legitimate call.
+  Both methods now accept `user=` or `user_id=` throughout, including in the
+  `defaults`-consistency check above.
+
+The natural, now-safe importer call:
+`Execution.objects.get_or_create(user=..., broker=..., broker_execution_id=...,
+defaults={...})`.
 
 Each `UserOwned` subclass also gets a second manager, `unscoped` (a plain
 `models.Manager()`). `Meta.base_manager_name = "unscoped"` and `Meta.default_manager_name =
@@ -229,6 +247,15 @@ row's `user_id` against `self.user_id`. Runs on every full `save()`/`create()` c
 exactly that failure mode on a different model). Nullable cross-FKs
 (`Execution.raw_import_row`) are skipped when unset.
 
+**Guards `self.user_id is None` too — added round-7 code review**: without this, a row saved
+without `user=` set compared a guarded FK's real owner against `self.user_id=None`, raising a
+misleading `CrossTenantForeignKeyError` ("belongs to user_id=5, not this row's
+user_id=None") instead of ever reaching the DB's own, correct `NOT NULL` violation on
+`user_id`. The check now returns immediately when `self.user_id is None`, letting the real
+constraint surface instead — confirmed live with a `JournalEntry(opening_execution=<valid
+execution>)` saved with no `user`: raises a plain `IntegrityError` naming `user_id`, not
+`CrossTenantForeignKeyError`.
+
 **Not uniformly `CrossTenantForeignKeyError`** — corrected wording, round-6 code review: an
 actual cross-tenant mismatch raises `CrossTenantForeignKeyError` (a `ValueError` subclass), but
 a guarded FK pointing at a **nonexistent** row (a dangling/invalid id) surfaces as a plain
@@ -238,6 +265,14 @@ check's problem" and lets the DB's real FK constraint be the one to reject it. N
 (declined in both round 5 and round 6, same reasoning): the data is still protected either way,
 just via a different exception type on that one path, and the fix would be a bigger design
 change for no additional safety.
+
+**Form/view handling — flagged, round-7 addendum, nothing built.** `CrossTenantForeignKeyError`
+is raised only inside `save()`, so Django's `ModelForm.is_valid()`/`full_clean()` machinery
+won't catch it — a future form-based edit that ends up with a cross-tenant-mismatched instance
+would surface this as an unhandled 500, not a graceful form error. No form code exists yet in
+this PR, so nothing is built for that here; the class's own docstring now carries a note for
+whoever builds the edit forms later: catch this explicitly and translate it into a validation
+error.
 
 **Perf**: fetches the related row's `user_id` via `.unscoped` (a
 `.values_list("user_id", flat=True)` lookup, not a full-row fetch) — **unless** Django already
@@ -328,6 +363,19 @@ Verified in `journal/tests.py`:
 - `test_get_or_create_with_user_only_in_defaults_is_rejected` (round-6) reproduces the exact
   live leak — `user` only in `defaults`, not the lookup kwargs — and asserts `ValueError`
   now, plus that user_a's row is untouched and nothing was created for user_b.
+- `test_get_or_create_with_conflicting_defaults_user_does_not_commit` (round-7 addendum)
+  reproduces the *second* live leak — `user` in both the lookup kwargs and a conflicting
+  `defaults`, no existing match — and asserts `ValueError` plus that no row was committed
+  at all, not even briefly.
+- `test_get_or_create_defaults_user_matching_lookup_is_fine` (round-7 addendum) is the
+  companion negative case: `defaults` specifying the *same* user as the lookup must keep
+  working.
+- `test_get_or_create_accepts_user_id_lookup_kwarg` (round-7) asserts `user_id=` works as
+  a lookup kwarg, not just `user=`.
+- `test_cross_tenant_check_skipped_when_user_id_is_none_lets_real_not_null_surface`
+  (round-7) asserts a `JournalEntry` saved with no `user` raises a plain `IntegrityError`
+  naming `user_id`, not a misleading `CrossTenantForeignKeyError`.
+- `test_execution_price_zero_rejected` (round-7) asserts `IntegrityError` on `price=0`.
 - `test_journalentry_risk_currency_blank_rejected_when_amount_set` and
   `test_execution_currency_blank_rejected` assert `IntegrityError` on
   `risk_currency=""` (with `planned_risk_amount` set) and `currency=""` respectively.
@@ -341,6 +389,15 @@ Verified in `journal/tests.py`:
   instance raises with zero SQL queries.
 - `test_execution_contract_multiplier_must_be_positive` asserts `IntegrityError` on
   `contract_multiplier=0`.
+
+`accounts/tests.py` (round-7 additions): `test_get_or_create_rejects_invalid_timezone` and
+`test_update_or_create_rejects_invalid_timezone_on_create_path`/`..._on_update_path` cover the
+`get_or_create`/`update_or_create` `full_clean()` bypass on both the create and update-existing
+paths; `test_get_or_create_returns_existing_user_without_recreating` is the sanity companion
+(valid input still works); `test_get_by_natural_key_case_folding_is_db_side_not_python`
+constructs a user with a non-ASCII local part (bypassing `full_clean()`, same pattern as
+`test_email_uniqueness_is_case_insensitive_at_db_level`) and asserts `get_by_natural_key`
+still finds it with the exact stored email.
 
 `config/tests.py` (new, round-5) covers `SECRET_KEY`'s fail-closed logic — necessarily via
 subprocess, since it's import-time settings behavior that can't be re-exercised once a test
@@ -374,8 +431,15 @@ and `journal_journalentry` confirms the final constraint set landed correctly �
 `journalentry_risk_currency_required_with_amount`'s blank-string exclusion present.
 `accounts` was not touched either time — still a single migration, no churn to squash.
 
-This is intended to be the last squash before merge — `journal` and `accounts` should now
-both have exactly one migration each for the lifetime of this PR.
+That was intended to be the last squash before merge, but round-7 added one more
+`CheckConstraint` (`execution_price_not_zero`) after it — per explicit instruction, folded
+directly into the existing `0001_initial.py` rather than adding a new migration file (same
+"nothing has shipped to a real DB yet" rule as every squash above), using the same
+reset-dev-DB-and-regenerate mechanism. `journal` and `accounts` still have exactly one
+migration each; round-7's constraint is simply already inside `0001_initial.py`, never its own
+file. Verified the same way as every prior squash: fresh `migrate` from zero, `makemigrations
+--check --dry-run` clean, full test suite passing (37/37), `psql \d journal_execution`
+confirms `execution_price_not_zero` present.
 
 ## Money / quantity / time — confirmed as built
 
@@ -413,6 +477,18 @@ task's code-review fixes:
   test list above) for all three cases: unset+`DEBUG=False` (raises), unset+`DEBUG=True` (dev
   fallback), and set+`DEBUG=False` (uses the real value). Required reordering `DEBUG` above
   `SECRET_KEY` in the file, since the fail-closed check needs to know `DEBUG` first.
+- **Round-7 addendum**: emptiness wasn't the only bad `SECRET_KEY` value. `.env.example`
+  shipped `DJANGO_SECRET_KEY=dev-only-change-me` — a value that looks real enough that
+  someone copying `.env.example` to `.env` could miss updating it, and the round-5 check only
+  verified the var was non-empty, not that it differed from the known placeholder. If ops set
+  `DEBUG=false` and never touched that line, the app would boot in "production mode" using a
+  key that's public in this repo's git history. Fixed two ways: renamed the placeholder to
+  something unmistakably fake (`DJANGO_SECRET_KEY=CHANGE-ME-run-get_random_secret_key`), and
+  added an explicit check in `settings.py` that rejects that exact known placeholder value the
+  same way it rejects emptiness — `DEBUG=False` with `DJANGO_SECRET_KEY` still set to the
+  placeholder raises `ImproperlyConfigured`, same as if it were unset; `DEBUG=True` still
+  falls back to the dev default either way. Verified via subprocess in `config/tests.py`, same
+  pattern as the empty-value tests.
 - `UserManager._create_user()` has a known, accepted TOCTOU: two concurrent signups with the
   same email can both pass the pre-save uniqueness check before either commits. Not fixed —
   the DB `UniqueConstraint(Lower("email"))` already prevents the actual duplicate row
