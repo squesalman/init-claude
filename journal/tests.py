@@ -8,11 +8,13 @@ A new UserOwned subclass added later without a factory registered below fails
 by the isolation test.
 """
 
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from journal.models import (
@@ -291,6 +293,59 @@ def test_get_or_create_and_update_or_create_work_on_default_manager():
 
 
 @pytest.mark.django_db
+def test_get_or_create_with_user_only_in_defaults_is_rejected():
+    """
+    Round-6 code review: round 5's bypass let get_or_create()/update_or_create() proxy
+    straight to the unscoped queryset, but the *lookup* kwargs (not `defaults`) decide
+    which existing row gets returned — `defaults` only applies on create. Confirmed live
+    before this fix: Execution.objects.get_or_create(broker="topstep",
+    broker_execution_id="SHARED1", defaults=dict(user=user_b, ...)), with `user` only in
+    `defaults`, returned user_a's existing matching row with created=False — no save()
+    ever ran, so the cross-tenant FK guard on save() never got a chance to fire. Must now
+    raise instead of leaking.
+    """
+    user_a = User.objects.create_user(email="t@example.com", password="x")
+    user_b = User.objects.create_user(email="u@example.com", password="x")
+
+    existing = Execution.objects.create(
+        user=user_a,
+        broker="topstep",
+        broker_execution_id="SHARED1",
+        symbol="MNQZ5",
+        side=Execution.SIDE_BUY,
+        quantity="1",
+        price="1",
+        currency="USD",
+        executed_at=timezone.now(),
+        source=Execution.SOURCE_IMPORT,
+    )
+
+    with pytest.raises(ValueError):
+        Execution.objects.get_or_create(
+            broker="topstep",
+            broker_execution_id="SHARED1",
+            defaults=dict(
+                user=user_b,
+                symbol="MNQZ5",
+                side=Execution.SIDE_BUY,
+                quantity="1",
+                price="1",
+                currency="USD",
+                executed_at=timezone.now(),
+                source=Execution.SOURCE_IMPORT,
+            ),
+        )
+
+    # No leak occurred: user_a's row is untouched, and nothing new was created for
+    # user_b under this broker/broker_execution_id pair.
+    existing.refresh_from_db()
+    assert existing.user_id == user_a.pk
+    assert not Execution.unscoped.filter(
+        broker="topstep", broker_execution_id="SHARED1", user=user_b
+    ).exists()
+
+
+@pytest.mark.django_db
 def test_journalentry_risk_currency_blank_rejected_when_amount_set():
     """
     Round-5 code review: the CHECK constraint only tested risk_currency__isnull, so
@@ -332,6 +387,82 @@ def test_execution_currency_blank_rejected():
                 executed_at=timezone.now(),
                 source=Execution.SOURCE_MANUAL,
             )
+
+
+@pytest.mark.django_db
+def test_execution_negative_price_is_allowed():
+    """
+    Round-6 code review: execution_price_nonnegative (price >= 0) was removed. Futures
+    have traded/settled negative in real markets — WTI crude (CL) settled around
+    -$37.63 on 2020-04-20 — and this app targets futures brokers (Topstep). quantity > 0
+    is still enforced; only price's sign was wrongly constrained.
+    """
+    user = User.objects.create_user(email="v@example.com", password="x")
+
+    execution = Execution.objects.create(
+        user=user,
+        broker="manual",
+        symbol="CLZ0",
+        side=Execution.SIDE_BUY,
+        quantity="1",
+        price="-37.63",
+        currency="USD",
+        executed_at=timezone.now(),
+        source=Execution.SOURCE_MANUAL,
+    )
+    execution.refresh_from_db()
+    assert execution.price == Decimal("-37.63")
+
+
+@pytest.mark.django_db
+def test_execution_broker_dedupe_exempts_empty_string_like_null():
+    """
+    Round-6 code review: the partial UniqueConstraint on
+    (user, broker, broker_execution_id) only exempted NULL, not empty string — a
+    hand-rolled write path persisting "" instead of None would have collided unrelated
+    manual entries, since "" IS NOT NULL. Two rows with broker_execution_id="" for the
+    same user/broker must coexist, the same as two rows with broker_execution_id=None.
+    """
+    user = User.objects.create_user(email="w@example.com", password="x")
+
+    first = Execution.objects.create(
+        user=user, broker="manual", broker_execution_id="", symbol="AAPL",
+        side=Execution.SIDE_BUY, quantity="1", price="1", currency="USD",
+        executed_at=timezone.now(), source=Execution.SOURCE_MANUAL,
+    )
+    second = Execution.objects.create(
+        user=user, broker="manual", broker_execution_id="", symbol="AAPL",
+        side=Execution.SIDE_BUY, quantity="1", price="1", currency="USD",
+        executed_at=timezone.now(), source=Execution.SOURCE_MANUAL,
+    )
+    assert first.pk != second.pk
+
+
+@pytest.mark.django_db
+def test_cross_tenant_fk_check_uses_cached_instance_without_extra_query():
+    """
+    Perf fix, round-6 code review: when the related instance is already a live Python
+    object on the model being saved (e.g. JournalEntry.objects.create(user=u,
+    opening_execution=execution_instance) — every factory in this file does exactly
+    this), Django caches it on assignment. The cross-tenant check must read `user_id`
+    off that cached instance instead of issuing a redundant SELECT.
+    """
+    user_a = User.objects.create_user(email="x@example.com", password="x")
+    user_b = User.objects.create_user(email="y@example.com", password="x")
+    execution_a = _make_execution(user_a)
+
+    with CaptureQueriesContext(connection) as ctx:
+        with pytest.raises(CrossTenantForeignKeyError):
+            JournalEntry.objects.create(user=user_b, opening_execution=execution_a)
+
+    select_on_execution = [
+        q["sql"] for q in ctx.captured_queries
+        if "journal_execution" in q["sql"] and q["sql"].strip().upper().startswith("SELECT")
+    ]
+    assert select_on_execution == [], (
+        "cross-tenant check issued a SELECT on journal_execution despite the related "
+        "instance already being cached in memory"
+    )
 
 
 @pytest.mark.django_db

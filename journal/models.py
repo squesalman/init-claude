@@ -22,10 +22,22 @@ class UserScopedManager(models.Manager):
     site has to opt OUT of scoping (via `Model.unscoped`) rather than opt into it. A
     forgotten `.for_user()` now fails loudly (RuntimeError) instead of silently returning
     every user's rows. `.create()`, `.get_or_create()`, and `.update_or_create()` are the
-    exceptions — none of them can leak (the `user` FK is NOT NULL and always passed
-    explicitly as a kwarg), and blocking them would break the ordinary
-    `Model.objects.create(user=..., ...)` idiom (and, for `get_or_create`, CLAUDE.md's
-    idempotent-import pattern) used throughout the app and its tests.
+    exceptions — `.create()` can't leak (the `user` FK is NOT NULL and always passed
+    explicitly as a kwarg), and blocking it would break the ordinary
+    `Model.objects.create(user=..., ...)` idiom used throughout the app and its tests.
+
+    `get_or_create()`/`update_or_create()` need more than that exemption, though (round-6
+    code review — round 5's bypass reintroduced a cross-tenant leak): their *lookup*
+    kwargs, not just `defaults`, determine which existing row (if any) gets returned, and
+    `defaults` is only applied on create. Confirmed live:
+    `Execution.objects.get_or_create(broker="topstep", broker_execution_id="SHARED1",
+    defaults=dict(user=user_b, ...))` — `user` only in `defaults`, not the lookup —
+    returned user_a's existing matching row with `created=False`, handing user_b user_a's
+    execution. No `save()` ever ran on that path, so `UserOwned.save()`'s cross-tenant FK
+    guard never got a chance to fire. Fixed by requiring `user=` in the top-level lookup
+    kwargs (raises `ValueError` otherwise) and asserting the returned row's `user_id`
+    matches afterward (raises `CrossTenantForeignKeyError` if it somehow doesn't — belt
+    and suspenders, since the lookup requirement should already make this unreachable).
     """
 
     def get_queryset(self):
@@ -41,20 +53,40 @@ class UserScopedManager(models.Manager):
     def create(self, **kwargs):
         return super().get_queryset().create(**kwargs)
 
-    def get_or_create(self, *args, **kwargs):
-        # Same bypass as create() above, for the same reason: get_or_create()/
-        # update_or_create() can only write (or write-then-read) a row for whichever
-        # user= is passed explicitly — no query result can leak across users just by
-        # calling this. Code review: without this, these proxied through the raising
-        # get_queryset() and blocked the idempotent-import pattern CLAUDE.md requires
-        # ("dedupe by broker + execution id"), e.g.
-        # Execution.objects.get_or_create(user=..., broker=..., broker_execution_id=...,
-        # defaults={...}) — the natural implementation, and it should work directly on
-        # `objects` as long as `user=` is passed, without needing `.for_user()` first.
-        return super().get_queryset().get_or_create(*args, **kwargs)
+    def get_or_create(self, defaults=None, **kwargs):
+        self._require_user_in_lookup_kwargs("get_or_create", kwargs)
+        obj, created = super().get_queryset().get_or_create(defaults=defaults, **kwargs)
+        self._assert_belongs_to_user(obj, kwargs["user"])
+        return obj, created
 
-    def update_or_create(self, *args, **kwargs):
-        return super().get_queryset().update_or_create(*args, **kwargs)
+    def update_or_create(self, defaults=None, create_defaults=None, **kwargs):
+        self._require_user_in_lookup_kwargs("update_or_create", kwargs)
+        # create_defaults is Django 5.0+; kwargs shape is identical to get_or_create's
+        # otherwise, so no separate comment needed beyond the class docstring above.
+        obj, created = super().get_queryset().update_or_create(
+            defaults=defaults, create_defaults=create_defaults, **kwargs
+        )
+        self._assert_belongs_to_user(obj, kwargs["user"])
+        return obj, created
+
+    @staticmethod
+    def _require_user_in_lookup_kwargs(method_name, kwargs):
+        if "user" not in kwargs:
+            raise ValueError(
+                f"{method_name}() on a UserOwned model requires `user=` in the "
+                "top-level lookup kwargs, not only inside `defaults=` — otherwise the "
+                "lookup can match (and return) another user's row before `defaults` is "
+                "ever applied. See UserScopedManager's docstring."
+            )
+
+    @staticmethod
+    def _assert_belongs_to_user(obj, user):
+        user_id = getattr(user, "pk", user)
+        if obj.user_id != user_id:
+            raise CrossTenantForeignKeyError(
+                f"{type(obj).__name__} (pk={obj.pk}) belongs to user_id={obj.user_id}, "
+                f"not the requested user_id={user_id}."
+            )
 
 
 class CrossTenantForeignKeyError(ValueError):
@@ -162,17 +194,35 @@ class UserOwned(models.Model):
         (not just `full_clean()`, which isn't reliably called — see
         UserManager._create_user's own bug in accounts/models.py), skipped only for
         `update_fields` saves that don't touch a guarded field (see `save()` above).
-        Compares `user_id` without loading the full related row.
+        Compares `user_id` without loading the full related row, unless Django already
+        has the related instance cached in memory (e.g. `JournalEntry.objects.create(
+        user=u, opening_execution=execution_instance)` — every factory in
+        journal/tests.py does exactly this), in which case it reads `user_id` off that
+        instead of issuing a redundant `SELECT` (perf fix, round-6 code review).
+
+        Note: this raises `CrossTenantForeignKeyError` for an actual cross-tenant
+        mismatch, but *not* uniformly for every bad FK — a guarded FK pointing at a
+        nonexistent row (a dangling/invalid id) surfaces as a plain `IntegrityError` from
+        the DB's own FK constraint at INSERT/UPDATE time instead, since
+        `related_user_id` comes back `None` and the `is not None` guard below
+        deliberately treats "no such row" as "not this check's problem" — the real FK
+        constraint already prevents a dangling reference regardless, so the data is
+        still protected, just via a different exception type on that path. Not changed
+        (round-5 and round-6 code review, both declined for the same reason); documented
+        here instead of overclaiming uniform coverage.
         """
         for field in self._guarded_fk_fields():
             related_id = getattr(self, field.attname)
             if related_id is None:
                 continue  # nullable FK not set (e.g. Execution.raw_import_row)
-            related_user_id = (
-                field.related_model.unscoped.filter(pk=related_id)
-                .values_list("user_id", flat=True)
-                .first()
-            )
+            if field.is_cached(self):
+                related_user_id = field.get_cached_value(self).user_id
+            else:
+                related_user_id = (
+                    field.related_model.unscoped.filter(pk=related_id)
+                    .values_list("user_id", flat=True)
+                    .first()
+                )
             if related_user_id is not None and related_user_id != self.user_id:
                 raise CrossTenantForeignKeyError(
                     f"{type(self).__name__}.{field.name} (pk={related_id}) belongs to "
@@ -237,6 +287,13 @@ class RawImportRow(UserOwned):
         ImportBatch, on_delete=models.CASCADE, related_name="rows"
     )
     line_number = models.IntegerField()
+    # Lossless-reparse note (round-6 code review, documented — no importer exists yet
+    # to enforce this in): JSONB can re-normalize numeric literals on write (precision/
+    # format drift, e.g. trailing zeros or exponent notation), which would violate
+    # CLAUDE.md's "keep raw data so parsing can be re-run" guarantee for anything
+    # numeric. Any future importer MUST serialize numeric values into this field as
+    # strings, never native Python float/int, to stay byte-for-byte lossless. See
+    # docs/data/schema.md for the same note.
     raw = models.JSONField()
     # VARCHAR(20), matching ADR-0003 (corrected upstream to VARCHAR(20); the original
     # VARCHAR(16) couldn't fit its own "skipped_duplicate" enum value).
@@ -301,10 +358,16 @@ class Execution(UserOwned):
     class Meta(UserOwned.Meta):
         constraints = [
             # Idempotent import, per CLAUDE.md and ADR-0003 §4. Partial so manual entries
-            # (NULL broker_execution_id) are exempt.
+            # (NULL broker_execution_id) are exempt. Also excludes empty string, not
+            # just NULL (round-6 code review): a hand-rolled write path that persisted
+            # "" instead of None would otherwise create spurious collisions between
+            # unrelated manual entries, since "" IS NOT NULL.
             models.UniqueConstraint(
                 fields=["user", "broker", "broker_execution_id"],
-                condition=models.Q(broker_execution_id__isnull=False),
+                condition=(
+                    models.Q(broker_execution_id__isnull=False)
+                    & ~models.Q(broker_execution_id="")
+                ),
                 name="execution_broker_dedupe",
             ),
             models.CheckConstraint(
@@ -313,9 +376,12 @@ class Execution(UserOwned):
             models.CheckConstraint(
                 condition=models.Q(quantity__gt=0), name="execution_quantity_positive"
             ),
-            models.CheckConstraint(
-                condition=models.Q(price__gte=0), name="execution_price_nonnegative"
-            ),
+            # No non-negative CheckConstraint on price (round-6 code review, removing
+            # execution_price_nonnegative which was here before): futures have traded
+            # and settled negative in real markets — WTI crude (CL) settled around
+            # -$37.63 on 2020-04-20 — and this app targets futures brokers (Topstep).
+            # `quantity > 0` above is still correct; direction lives in `side`, not
+            # price's sign.
             models.CheckConstraint(
                 condition=models.Q(source__in=["manual", "import"]),
                 name="execution_source_valid",

@@ -81,7 +81,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     rather than the CITEXT extension — ADR-0003 names this as an acceptable substitute.
     """
 
-    email = models.EmailField(max_length=254)
+    # No explicit max_length: 254 is EmailField's own built-in default (code review,
+    # round 6) — restating it here would just be a number someone has to keep in sync
+    # with Django's default for no reason.
+    email = models.EmailField()
     timezone = models.CharField(max_length=64, default="UTC", validators=[validate_timezone])
     # VARCHAR(3), not ADR-0003's literal CHAR(3) — see journal/models.py's
     # Execution.currency comment and docs/data/schema.md for why.

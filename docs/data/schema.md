@@ -15,7 +15,7 @@ territory per ADR-0003 §5).
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
 | `id` | `BIGINT` (identity) | no | PK |
-| `email` | `VARCHAR(254)` | no | `USERNAME_FIELD`. Case-insensitive uniqueness via `UNIQUE (lower(email))`, **not** the `CITEXT` extension — ADR-0003 §1 names this as an acceptable substitute. Django's `auth.E003` check doesn't recognize expression-based `UniqueConstraint`s, so it's silenced in `config/settings.py` with a comment; the DB guarantee is unaffected and is *stricter* than what the check looks for. Login (`UserManager.get_by_natural_key`) filters on `.annotate(email_lower=Lower("email")).get(email_lower=value.lower())`, **not** `email__iexact=value` — `__iexact` compiles to `UPPER(email) = UPPER(%s)`, which doesn't match this index and forces a seq scan on every login attempt (verified with `EXPLAIN`, round-2 code review: `iexact` → `Seq Scan on accounts_user`; the `Lower()` annotation → `Index Scan using accounts_user_email_lower_uniq`). `UserManager._create_user()`'s missing-email guard raises `ValidationError`, not `ValueError` (**round-4 code review**, for consistency — every other invalid-field case in `_create_user()` is caught via `full_clean()` and raises `ValidationError`; a caller only needs to catch one exception type). |
+| `email` | `VARCHAR(254)` | no | `254` is `EmailField`'s own built-in default, not an explicit `max_length=` on the field (**round-6 cleanup**: dropped an explicit `max_length=254` that just restated Django's default — `makemigrations` confirms no schema change resulted). `USERNAME_FIELD`. Case-insensitive uniqueness via `UNIQUE (lower(email))`, **not** the `CITEXT` extension — ADR-0003 §1 names this as an acceptable substitute. Django's `auth.E003` check doesn't recognize expression-based `UniqueConstraint`s, so it's silenced in `config/settings.py` with a comment; the DB guarantee is unaffected and is *stricter* than what the check looks for. Login (`UserManager.get_by_natural_key`) filters on `.annotate(email_lower=Lower("email")).get(email_lower=value.lower())`, **not** `email__iexact=value` — `__iexact` compiles to `UPPER(email) = UPPER(%s)`, which doesn't match this index and forces a seq scan on every login attempt (verified with `EXPLAIN`, round-2 code review: `iexact` → `Seq Scan on accounts_user`; the `Lower()` annotation → `Index Scan using accounts_user_email_lower_uniq`). `UserManager._create_user()`'s missing-email guard raises `ValidationError`, not `ValueError` (**round-4 code review**, for consistency — every other invalid-field case in `_create_user()` is caught via `full_clean()` and raises `ValidationError`; a caller only needs to catch one exception type). |
 | `password` | `VARCHAR(128)` | no | Django PBKDF2 hash |
 | `timezone` | `VARCHAR(64)` | no, default `'UTC'` | IANA name, validated against `accounts.models._AVAILABLE_TIMEZONES` — `frozenset(zoneinfo.available_timezones())` computed once at import time, not re-scanned per call (no DB-level check — the set changes only with a tzdata upgrade + process restart, hence a plain module constant rather than a `CHECK` or a per-call cache). Actually enforced on the only signup path: `UserManager._create_user()` calls `full_clean()` before `save()` — **fixed in code review, round 3**: it previously only constructed and saved the model directly, so `validate_timezone` (a field validator, which only runs via `full_clean()`) never ran; `create_user(timezone="Not/A_Real_Zone")` saved without error. |
 | `base_currency` | `VARCHAR(3)` | no, default `'USD'` | ISO 4217. Display default only; never overrides an amount's own currency column |
@@ -46,7 +46,7 @@ Verbatim CSV rows, re-parseable. `user_id` denormalized here rather than reached
 |---|---|---|---|
 | `import_batch_id` | `BIGINT FK → journal_importbatch` | no | `ON DELETE CASCADE` |
 | `line_number` | `INTEGER` | no | 1-based |
-| `raw` | `JSONB` | no | `{header: cell}`, strings only, no coercion |
+| `raw` | `JSONB` | no | `{header: cell}`, strings only, no coercion. **Lossless-reparse note, round-6 code review, document-only — no importer exists yet**: `JSONB` can re-normalize numeric literals on write (precision/format drift — trailing zeros, exponent notation), which would violate CLAUDE.md's "keep raw data so parsing can be re-run" guarantee for anything numeric. Any future importer **must** serialize numeric values into this field as strings, never native Python `float`/`int`, to stay byte-for-byte lossless. Matching comment on the field in `journal/models.py`. |
 | `status` | `VARCHAR(20)` | no | `CHECK (status IN ('imported','skipped_duplicate','failed'))` — `rawimportrow_status_valid`. Matches ADR-0003's `VARCHAR(20)` (corrected upstream from an original `VARCHAR(16)` that couldn't fit its own `'skipped_duplicate'` enum value). |
 | `error` | `TEXT` | no, default `''` | shown to the user, never silently dropped |
 
@@ -61,12 +61,12 @@ Immutable by convention (never `UPDATE`d; corrections delete+recreate).
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
 | `broker` | `VARCHAR(32)` | no | `'topstep'` or `'manual'` |
-| `broker_execution_id` | `VARCHAR(128)` | yes | `NULL` for manual entry |
+| `broker_execution_id` | `VARCHAR(128)` | yes | `NULL` for manual entry. The dedupe `UniqueConstraint` below (`execution_broker_dedupe`) exempts both `NULL` **and** empty string — see that constraint's note |
 | `broker_account_label` | `VARCHAR(64)` | no, default `''` | verbatim from export; no account table yet |
 | `symbol` | `VARCHAR(32)` | no | uppercased, as broker wrote it |
 | `side` | `VARCHAR(4)` | no | `CHECK (side IN ('buy','sell'))` |
 | `quantity` | `NUMERIC(20,10)` | no | `CHECK (quantity > 0)`. Always positive; direction lives in `side` |
-| `price` | `NUMERIC(20,10)` | no | `CHECK (price >= 0)` |
+| `price` | `NUMERIC(20,10)` | no | No non-negative `CHECK`. **Removed round-6 code review** (was `CHECK (price >= 0)` — `execution_price_nonnegative`): futures have traded/settled negative in real markets (WTI crude, CL, settled around -$37.63 on 2020-04-20), and this app targets futures brokers (Topstep). `quantity > 0` below is still correct and unaffected — direction lives in `side`, not price's sign |
 | `contract_multiplier` | `NUMERIC(20,10)` | no, default 1 | point value per contract, stored per fill so a contract-spec change never rewrites old P&L. `CHECK (contract_multiplier > 0)` — `execution_contract_multiplier_positive`, added round-3 code review: it's the P&L multiplier, so 0 or negative would silently corrupt every derived trade, and `quantity`/`price` in the same constraints list already had this protection while this column didn't |
 | `fees` | `NUMERIC(19,4)` | no, default 0 | total cost of this fill |
 | `currency` | `VARCHAR(3)` | no | ISO 4217, applies to `fees` and derived P&L. `CHECK (currency <> '')` — `execution_currency_not_blank`, added round-5 code review: unlike `quantity`/`price`/`contract_multiplier` in the same constraints list, `currency` had no non-empty guard at all (no `CheckConstraint`, no `full_clean()` call site on this write path), so a money-bearing execution could be saved with `currency=""`, silently violating CLAUDE.md's "store currency with every amount" |
@@ -77,10 +77,14 @@ Immutable by convention (never `UPDATE`d; corrections delete+recreate).
 
 Constraints/indexes:
 
-- `UNIQUE (user_id, broker, broker_execution_id) WHERE broker_execution_id IS NOT NULL` —
-  `execution_broker_dedupe`. This *is* idempotent import; no importer-side locking needed.
-  Verified with `EXPLAIN`: a lookup by `(user_id, broker, broker_execution_id)` uses this
-  index directly (`Index Scan using execution_broker_dedupe`).
+- `UNIQUE (user_id, broker, broker_execution_id) WHERE broker_execution_id IS NOT NULL AND
+  broker_execution_id != ''` — `execution_broker_dedupe`. This *is* idempotent import; no
+  importer-side locking needed. Verified with `EXPLAIN`: a lookup by
+  `(user_id, broker, broker_execution_id)` uses this index directly (`Index Scan using
+  execution_broker_dedupe`). **Extended round-6 code review** to also exclude empty string,
+  not just `NULL`: a hand-rolled write path persisting `""` instead of `None` would
+  otherwise create spurious collisions between unrelated manual entries, since `""` is
+  `IS NOT NULL`.
 - `(user_id, symbol, executed_at)` — `execution_user_symbol_ts_idx`. The FIFO matcher's read
   pattern: one user's fills for one symbol, oldest first. Verified with `EXPLAIN` on
   `WHERE user_id = ? ORDER BY symbol, executed_at`.
@@ -128,10 +132,14 @@ Constraints/indexes:
 
   ADR-0003's index list separately specified `(user_id) WHERE rules_followed IS NULL` as its
   own partial index. Built initially per the ADR, then **dropped per code review**
-  (`journalentry_not_journaled_idx`, removed in `journal/migrations/0005_...`): it was
-  redundant once `journalentry_user_flag_idx` existed to cover the yes/no states, since the
-  composite index serves the NULL case just as well (confirmed above), and this table is one
-  row per trade — cheap either way, but no reason to carry two indexes for one query shape.
+  (`journalentry_not_journaled_idx`): it was redundant once `journalentry_user_flag_idx`
+  existed to cover the yes/no states, since the composite index serves the NULL case just as
+  well (confirmed above), and this table is one row per trade — cheap either way, but no
+  reason to carry two indexes for one query shape. **Corrected round-6 code review**: this
+  used to cite `journal/migrations/0005_...` for where the drop happened — that file no
+  longer exists after the round-4 migration squash (only `0001`–`0003` exist now; see
+  "Migration history" below). The drop is simply baked into the squashed `0001_initial.py`,
+  which never creates the index at all, rather than living in its own migration.
 
 ## Tenant isolation
 
@@ -146,15 +154,30 @@ from using the unscoped default manager and leaking cross-user data): `UserScope
 `.filter()`, `.get()`, etc. all fail loudly instead of silently returning every user's rows.
 `.for_user(user)` bypasses the raise (it calls `super().get_queryset()` directly) and remains
 the one sanctioned read path. `.create()`, `.get_or_create()`, and `.update_or_create()` are
-separately exempted on the manager — none of them are a read and none can leak (the `user` FK
-is `NOT NULL` and always passed explicitly as a kwarg), so blocking them would break the
-ordinary `Model.objects.create(user=..., ...)` idiom. `get_or_create`/`update_or_create` were
-missed in the original hardening and added in **round-5 code review**: they proxied through
-the raising `get_queryset()`, contradicting the manager's own docstring claim that `.create()`
-was the one exception, and directly blocked the idempotent-import pattern CLAUDE.md requires
-("dedupe by broker + execution id") — the natural implementation is
-`Execution.objects.get_or_create(user=..., broker=..., broker_execution_id=...,
-defaults={...})`.
+separately exempted on the manager. `.create()` is unconditionally safe — it isn't a read and
+can't leak (the `user` FK is `NOT NULL` and always passed explicitly as a kwarg), so blocking
+it would break the ordinary `Model.objects.create(user=..., ...)` idiom.
+
+`get_or_create`/`update_or_create` are **not** unconditionally safe, and took two rounds to
+get right:
+
+- **Round-5**: missed in the original hardening — they proxied through the raising
+  `get_queryset()`, contradicting the manager's own docstring claim that `.create()` was the
+  one exception, and directly blocked the idempotent-import pattern CLAUDE.md requires
+  ("dedupe by broker + execution id"). Bypassed the same way as `.create()`.
+- **Round-6**: that bypass reintroduced a cross-tenant leak. `get_or_create`'s *lookup* kwargs
+  (not `defaults`) decide which existing row gets returned — `defaults` only applies on
+  create. Confirmed live: `Execution.objects.get_or_create(broker="topstep",
+  broker_execution_id="SHARED1", defaults=dict(user=user_b, ...))`, with `user` only in
+  `defaults`, returned user_a's existing matching row with `created=False`, handing user_b
+  user_a's execution — no `save()` ever ran on that path, so `UserOwned.save()`'s
+  cross-tenant FK guard never fired. Fixed by requiring `user=` in the top-level lookup
+  kwargs (raises `ValueError` if it's missing or only in `defaults`) and asserting the
+  returned row's `user_id` matches afterward (raises `CrossTenantForeignKeyError` as a
+  belt-and-suspenders check, since the lookup requirement should already make a mismatch
+  unreachable). The natural, now-safe importer call:
+  `Execution.objects.get_or_create(user=..., broker=..., broker_execution_id=...,
+  defaults={...})`.
 
 Each `UserOwned` subclass also gets a second manager, `unscoped` (a plain
 `models.Manager()`). `Meta.base_manager_name = "unscoped"` and `Meta.default_manager_name =
@@ -200,13 +223,31 @@ Fixed once, generically, on `UserOwned.save()` rather than per model, since the 
 bug applies to every cross-FK in the schema (`RawImportRow.import_batch`,
 `Execution.raw_import_row`, `JournalEntry.opening_execution`). `save()` introspects
 `self._meta.get_fields()` for every `ForeignKey` (`OneToOneField` included — it's a `ForeignKey`
-subclass) whose `related_model` is itself a `UserOwned` subclass, fetches only that related
-row's `user_id` via `.unscoped` (a `.values_list("user_id", flat=True)` lookup, not a full-row
-fetch), and raises `CrossTenantForeignKeyError` (a `ValueError` subclass) if it doesn't match
-`self.user_id`. Runs on every full `save()`/`create()` call, not just `full_clean()` —
-`full_clean()` isn't reliably called (see `accounts_user.timezone` above for exactly that
-failure mode on a different model). Nullable cross-FKs (`Execution.raw_import_row`) are skipped
-when unset.
+subclass) whose `related_model` is itself a `UserOwned` subclass, and compares that related
+row's `user_id` against `self.user_id`. Runs on every full `save()`/`create()` call, not just
+`full_clean()` — `full_clean()` isn't reliably called (see `accounts_user.timezone` above for
+exactly that failure mode on a different model). Nullable cross-FKs
+(`Execution.raw_import_row`) are skipped when unset.
+
+**Not uniformly `CrossTenantForeignKeyError`** — corrected wording, round-6 code review: an
+actual cross-tenant mismatch raises `CrossTenantForeignKeyError` (a `ValueError` subclass), but
+a guarded FK pointing at a **nonexistent** row (a dangling/invalid id) surfaces as a plain
+`IntegrityError` from the DB's own FK constraint at INSERT/UPDATE time instead — the lookup
+comes back with no `user_id` to compare, so this check treats "no such row" as "not this
+check's problem" and lets the DB's real FK constraint be the one to reject it. Not changed
+(declined in both round 5 and round 6, same reasoning): the data is still protected either way,
+just via a different exception type on that one path, and the fix would be a bigger design
+change for no additional safety.
+
+**Perf**: fetches the related row's `user_id` via `.unscoped` (a
+`.values_list("user_id", flat=True)` lookup, not a full-row fetch) — **unless** Django already
+has the related instance cached in memory (round-6 code review: `field.is_cached(self)`),
+e.g. `JournalEntry.objects.create(user=u, opening_execution=execution_instance)` — every
+factory in `journal/tests.py` does exactly this — in which case it reads `user_id` off the
+cached instance directly and skips the query entirely. Verified with
+`CaptureQueriesContext`: a cross-tenant `create()` with a cached related instance is caught
+with **zero** SQL queries (no `SELECT` for the check, no `INSERT` since the exception fires
+first).
 
 **Perf fix, round-4 code review**: `save()` accepts `update_fields` (read out of `**kwargs`,
 not a named parameter — see below) and only re-runs the check (one `SELECT` per guarded FK)
@@ -284,9 +325,20 @@ Verified in `journal/tests.py`:
   positional `save()` signature — and asserts it doesn't raise `TypeError`.
 - `test_get_or_create_and_update_or_create_work_on_default_manager` exercises the exact
   idempotent-import shape CLAUDE.md requires directly on `Model.objects`.
+- `test_get_or_create_with_user_only_in_defaults_is_rejected` (round-6) reproduces the exact
+  live leak — `user` only in `defaults`, not the lookup kwargs — and asserts `ValueError`
+  now, plus that user_a's row is untouched and nothing was created for user_b.
 - `test_journalentry_risk_currency_blank_rejected_when_amount_set` and
   `test_execution_currency_blank_rejected` assert `IntegrityError` on
   `risk_currency=""` (with `planned_risk_amount` set) and `currency=""` respectively.
+- `test_execution_negative_price_is_allowed` (round-6) asserts a `price="-37.63"`
+  execution saves and round-trips correctly, now that `execution_price_nonnegative` is
+  gone.
+- `test_execution_broker_dedupe_exempts_empty_string_like_null` (round-6) asserts two
+  executions with `broker_execution_id=""` for the same user/broker coexist.
+- `test_cross_tenant_fk_check_uses_cached_instance_without_extra_query` (round-6) asserts
+  via `CaptureQueriesContext` that a cross-tenant `create()` with a cached related
+  instance raises with zero SQL queries.
 - `test_execution_contract_multiplier_must_be_positive` asserts `IntegrityError` on
   `contract_multiplier=0`.
 
@@ -306,6 +358,12 @@ carry it into permanent history). Verified: fresh `migrate` from zero applies th
 `0001_initial.py` cleanly, `makemigrations --check --dry-run` reports no changes, and the DDL
 inspected via `psql \d journal_execution` afterward is byte-for-byte the same shape as before
 the squash. `accounts` was not touched — its single migration had no churn to squash.
+
+**Not re-squashed since** (round-5 added `0002`, round-6 added `0003`) — deliberate, per
+explicit direction: squash everything into one clean `0001_initial.py` again in a dedicated
+final pass right before merge, not after every review round. `journal` currently has three
+migrations (`0001`–`0003`); this note exists so a future reference to "the squashed
+migration" doesn't assume `0001` alone still reflects the full current schema.
 
 ## Money / quantity / time — confirmed as built
 
