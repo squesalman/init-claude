@@ -137,9 +137,9 @@ Constraints/indexes:
   well (confirmed above), and this table is one row per trade — cheap either way, but no
   reason to carry two indexes for one query shape. **Corrected round-6 code review**: this
   used to cite `journal/migrations/0005_...` for where the drop happened — that file no
-  longer exists after the round-4 migration squash (only `0001`–`0003` exist now; see
-  "Migration history" below). The drop is simply baked into the squashed `0001_initial.py`,
-  which never creates the index at all, rather than living in its own migration.
+  longer existed even at that point, and doesn't now either (see "Migration history" below
+  for the full squash history). The drop is simply baked into `0001_initial.py`, which never
+  creates the index at all, rather than living in its own migration.
 
 ## Tenant isolation
 
@@ -350,20 +350,32 @@ process has already imported settings once: `test_secret_key_required_when_debug
 
 ### Migration history
 
-`journal`'s migrations were squashed to a single `0001_initial.py` in round-4 code review
-(the prior `0001`–`0007` reflected four rounds of review churn — an index added then
-dropped, `on_delete` changed twice, `Meta` options redeclared then DRY'd up — none of which
-had ever been applied to a real/shipped database on this branch, so there was no reason to
-carry it into permanent history). Verified: fresh `migrate` from zero applies the squashed
-`0001_initial.py` cleanly, `makemigrations --check --dry-run` reports no changes, and the DDL
-inspected via `psql \d journal_execution` afterward is byte-for-byte the same shape as before
-the squash. `accounts` was not touched — its single migration had no churn to squash.
+`journal`'s migrations were squashed to a single `0001_initial.py` twice: once in round-4
+code review, and again in a **final pre-merge squash** after round-6 landed (this note
+reflects that second, current squash — the round-4 note above is kept for history but is no
+longer the live state).
 
-**Not re-squashed since** (round-5 added `0002`, round-6 added `0003`) — deliberate, per
-explicit direction: squash everything into one clean `0001_initial.py` again in a dedicated
-final pass right before merge, not after every review round. `journal` currently has three
-migrations (`0001`–`0003`); this note exists so a future reference to "the squashed
-migration" doesn't assume `0001` alone still reflects the full current schema.
+Between the two squashes, `journal` picked up `0002` (round-5: `default_manager_name` +
+manager changes) and `0003` (round-6: dropped `execution_price_nonnegative`, widened
+`execution_broker_dedupe`'s exemption to empty string as well as `NULL`) — three migrations
+total, none of which had ever been applied to a real/shipped database on this branch, so
+there was no reason to carry any of that churn into permanent history. Squashed back down to
+one `0001_initial.py` reflecting the final schema: reset the local dev DB (`docker compose
+down -v` — this session's own container, no real data), deleted `0001`–`0003`, and
+regenerated a fresh `0001_initial.py` from the current models.
+
+Verified after this final squash: fresh `migrate` from zero applies `0001_initial.py`
+cleanly (including all of round 6's changes), `makemigrations --check --dry-run` reports no
+changes, the full test suite still passes (25/25), and `psql \d` on both `journal_execution`
+and `journal_journalentry` confirms the final constraint set landed correctly — notably
+`execution_broker_dedupe`'s widened `WHERE broker_execution_id IS NOT NULL AND NOT
+(broker_execution_id = '' AND broker_execution_id IS NOT NULL)`, no
+`execution_price_nonnegative`, `execution_currency_not_blank` present, and
+`journalentry_risk_currency_required_with_amount`'s blank-string exclusion present.
+`accounts` was not touched either time — still a single migration, no churn to squash.
+
+This is intended to be the last squash before merge — `journal` and `accounts` should now
+both have exactly one migration each for the lifetime of this PR.
 
 ## Money / quantity / time — confirmed as built
 
