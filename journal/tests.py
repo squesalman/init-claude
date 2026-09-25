@@ -196,11 +196,142 @@ def test_save_update_fields_skips_fk_check_unless_a_guarded_field_is_touched():
         entry.save(update_fields=["opening_execution"])
     mocked.assert_called_once()
 
+    # Same, but naming the FK's attname (opening_execution_id) instead of its field
+    # name — round-5 code review: Django's update_fields accepts either, and matching
+    # only field.name meant this variant slipped through unchecked.
+    third_execution = _make_execution(user)
+    entry.opening_execution = third_execution
+    with patch.object(JournalEntry, "_check_cross_tenant_fks", autospec=True) as mocked:
+        entry.save(update_fields=["opening_execution_id"])
+    mocked.assert_called_once()
+
     # A full save (update_fields=None, the default): must still run.
     entry.note = "updated again"
     with patch.object(JournalEntry, "_check_cross_tenant_fks", autospec=True) as mocked:
         entry.save()
     mocked.assert_called_once()
+
+
+@pytest.mark.django_db
+def test_save_accepts_django_real_positional_signature():
+    """
+    Round-5 code review: UserOwned.save(self, *args, update_fields=None, **kwargs) used
+    to collide with Django's real Model.save(force_insert, force_update, using,
+    update_fields) — all four are positional-capable, so
+    save(False, False, None, ["note"]) put ["note"] into *args while this override's
+    named update_fields stayed None, then super().save(*args,
+    update_fields=update_fields, **kwargs) supplied update_fields both positionally
+    (still in args) and as a keyword, raising TypeError. Fixed by not declaring
+    update_fields as a named parameter at all.
+    """
+    user = User.objects.create_user(email="p@example.com", password="x")
+    entry = _make_journal_entry(user)
+
+    entry.note = "positional"
+    entry.save(False, False, None, ["note"])  # would have raised TypeError before the fix
+
+    entry.refresh_from_db()
+    assert entry.note == "positional"
+
+
+@pytest.mark.django_db
+def test_get_or_create_and_update_or_create_work_on_default_manager():
+    """
+    Round-5 code review: get_or_create()/update_or_create() proxied through the
+    raising get_queryset(), contradicting the manager's own docstring claim that
+    .create() is the one exception — and directly blocking the idempotent-import
+    pattern CLAUDE.md requires ("dedupe by broker + execution id"), whose natural
+    implementation is exactly
+    Execution.objects.get_or_create(user=..., broker=..., broker_execution_id=...,
+    defaults={...}). Neither call can leak: `user` is a required, explicit kwarg.
+    """
+    user = User.objects.create_user(email="q@example.com", password="x")
+
+    execution, created = Execution.objects.get_or_create(
+        user=user,
+        broker="topstep",
+        broker_execution_id="1:entry",
+        defaults=dict(
+            symbol="MNQZ5",
+            side=Execution.SIDE_BUY,
+            quantity="1",
+            price="1",
+            currency="USD",
+            executed_at=timezone.now(),
+            source=Execution.SOURCE_IMPORT,
+        ),
+    )
+    assert created
+
+    # Idempotent re-call (the actual importer use case): same row, not created again.
+    same_execution, created_again = Execution.objects.get_or_create(
+        user=user,
+        broker="topstep",
+        broker_execution_id="1:entry",
+        defaults=dict(
+            symbol="MNQZ5",
+            side=Execution.SIDE_BUY,
+            quantity="1",
+            price="1",
+            currency="USD",
+            executed_at=timezone.now(),
+            source=Execution.SOURCE_IMPORT,
+        ),
+    )
+    assert not created_again
+    assert same_execution.pk == execution.pk
+
+    execution, updated = Execution.objects.update_or_create(
+        user=user,
+        broker="topstep",
+        broker_execution_id="1:entry",
+        defaults={"fees": "1.23"},
+    )
+    assert str(execution.fees) == "1.23"
+
+
+@pytest.mark.django_db
+def test_journalentry_risk_currency_blank_rejected_when_amount_set():
+    """
+    Round-5 code review: the CHECK constraint only tested risk_currency__isnull, so
+    risk_currency="" satisfied "required iff planned_risk_amount is set" despite being
+    meaningless. planned_risk_amount="100.00", risk_currency="" must be rejected.
+    """
+    user = User.objects.create_user(email="r@example.com", password="x")
+    execution = _make_execution(user)
+
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            JournalEntry.objects.create(
+                user=user,
+                opening_execution=execution,
+                planned_risk_amount="100.00",
+                risk_currency="",
+            )
+
+
+@pytest.mark.django_db
+def test_execution_currency_blank_rejected():
+    """
+    Round-5 code review: currency had no non-empty guard at all — no CheckConstraint,
+    no full_clean() call site — unlike quantity/price/contract_multiplier in the same
+    Meta.constraints list. CLAUDE.md: "store currency with every amount."
+    """
+    user = User.objects.create_user(email="s@example.com", password="x")
+
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            Execution.objects.create(
+                user=user,
+                broker="manual",
+                symbol="AAPL",
+                side=Execution.SIDE_BUY,
+                quantity="1",
+                price="1",
+                currency="",
+                executed_at=timezone.now(),
+                source=Execution.SOURCE_MANUAL,
+            )
 
 
 @pytest.mark.django_db

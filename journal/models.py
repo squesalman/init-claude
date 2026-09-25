@@ -21,9 +21,11 @@ class UserScopedManager(models.Manager):
     Hardened per code review: the default queryset is deliberately unusable, so a call
     site has to opt OUT of scoping (via `Model.unscoped`) rather than opt into it. A
     forgotten `.for_user()` now fails loudly (RuntimeError) instead of silently returning
-    every user's rows. `.create()` is the one exception — it can't leak (the `user` FK is
-    NOT NULL and always passed explicitly), and blocking it would break the ordinary
-    `Model.objects.create(user=..., ...)` idiom used throughout the app and its tests.
+    every user's rows. `.create()`, `.get_or_create()`, and `.update_or_create()` are the
+    exceptions — none of them can leak (the `user` FK is NOT NULL and always passed
+    explicitly as a kwarg), and blocking them would break the ordinary
+    `Model.objects.create(user=..., ...)` idiom (and, for `get_or_create`, CLAUDE.md's
+    idempotent-import pattern) used throughout the app and its tests.
     """
 
     def get_queryset(self):
@@ -38,6 +40,21 @@ class UserScopedManager(models.Manager):
 
     def create(self, **kwargs):
         return super().get_queryset().create(**kwargs)
+
+    def get_or_create(self, *args, **kwargs):
+        # Same bypass as create() above, for the same reason: get_or_create()/
+        # update_or_create() can only write (or write-then-read) a row for whichever
+        # user= is passed explicitly — no query result can leak across users just by
+        # calling this. Code review: without this, these proxied through the raising
+        # get_queryset() and blocked the idempotent-import pattern CLAUDE.md requires
+        # ("dedupe by broker + execution id"), e.g.
+        # Execution.objects.get_or_create(user=..., broker=..., broker_execution_id=...,
+        # defaults={...}) — the natural implementation, and it should work directly on
+        # `objects` as long as `user=` is passed, without needing `.for_user()` first.
+        return super().get_queryset().get_or_create(*args, **kwargs)
+
+    def update_or_create(self, *args, **kwargs):
+        return super().get_queryset().update_or_create(*args, **kwargs)
 
 
 class CrossTenantForeignKeyError(ValueError):
@@ -67,12 +84,14 @@ class UserOwned(models.Model):
     #
     # Known gap, documented per code review rather than built for: this manager (and the
     # cross-tenant FK guard on save() below) only guards the `save()` path. Django never
-    # calls `save()` for `bulk_create`/`bulk_update` — `Model.unscoped.bulk_create(...)`
-    # bypasses both entirely. No caller does bulk writes yet (no importer in this PR), so
-    # no bulk-write guard is built speculatively. Any future bulk-write code (the Topstep
-    # importer) must either loop per-row `.save()` or add its own explicit ownership
-    # check before calling `bulk_create`/`bulk_update` — see docs/data/schema.md's
-    # "Cross-tenant FK integrity" section.
+    # calls `save()` for `bulk_create`/`bulk_update`/`QuerySet.update()` —
+    # `Model.unscoped.bulk_create(...)`, `.bulk_update(...)`, and
+    # `Model.unscoped.filter(...).update(...)` all bypass it entirely. No caller does
+    # bulk writes yet (no importer in this PR), so no bulk-write guard is built
+    # speculatively. Any future bulk-write code (the Topstep importer) must either loop
+    # per-row `.save()` or add its own explicit ownership check before calling
+    # `bulk_create`/`bulk_update`/`.update()` — see docs/data/schema.md's "Cross-tenant
+    # FK integrity" section.
     unscoped = models.Manager()
 
     class Meta:
@@ -84,7 +103,19 @@ class UserOwned(models.Model):
         base_manager_name = "unscoped"
         default_manager_name = "unscoped"
 
-    def save(self, *args, update_fields=None, **kwargs):
+    def save(self, *args, **kwargs):
+        # Signature is *args, **kwargs, not a named `update_fields=None` param (code
+        # review, round 5): Django's real Model.save() signature is
+        # save(force_insert=False, force_update=False, using=None, update_fields=None),
+        # all of which can be passed positionally. A named `update_fields` param here
+        # would shadow that position — a positional call like
+        # save(False, False, None, ["note"]) would put ["note"] into *args instead of
+        # this override's `update_fields`, and then `super().save(*args,
+        # update_fields=update_fields, **kwargs)` would supply update_fields both
+        # positionally (still in args) and as a keyword, raising TypeError. Reading it
+        # out of kwargs and forwarding *args/**kwargs unchanged avoids the collision
+        # entirely — this override never needs to pass update_fields on, only inspect it.
+        update_fields = kwargs.get("update_fields")
         # Perf fix per code review: only re-run the (one SELECT per guarded FK)
         # cross-tenant check when it could actually matter — a full save/create, or an
         # update_fields save that actually touches one of the guarded FK fields. A
@@ -94,9 +125,16 @@ class UserOwned(models.Model):
             self._check_cross_tenant_fks()
         else:
             touched = set(update_fields)
-            if any(f.name in touched for f in self._guarded_fk_fields()):
+            # Match both the field name (e.g. "opening_execution") and its attname
+            # (e.g. "opening_execution_id") — Django's update_fields accepts either
+            # for a FK (round-5 code review: matching only field.name meant
+            # save(update_fields=["opening_execution_id"]) skipped the check entirely).
+            if any(
+                f.name in touched or f.attname in touched
+                for f in self._guarded_fk_fields()
+            ):
                 self._check_cross_tenant_fks()
-        super().save(*args, update_fields=update_fields, **kwargs)
+        super().save(*args, **kwargs)
 
     def _guarded_fk_fields(self):
         """Every ForeignKey (OneToOneField included — it subclasses ForeignKey) whose
@@ -289,6 +327,13 @@ class Execution(UserOwned):
                 condition=models.Q(contract_multiplier__gt=0),
                 name="execution_contract_multiplier_positive",
             ),
+            # currency had no non-empty guard at all — no CheckConstraint, no
+            # full_clean() call site — unlike quantity/price/contract_multiplier above
+            # (round-5 code review). CLAUDE.md: "store currency with every amount"; a
+            # blank currency on a money-bearing execution violates that silently.
+            models.CheckConstraint(
+                condition=~models.Q(currency=""), name="execution_currency_not_blank"
+            ),
         ]
         indexes = [
             # The matcher's read pattern: a user's fills for one symbol, in time order.
@@ -334,10 +379,18 @@ class JournalEntry(UserOwned):
 
     class Meta(UserOwned.Meta):
         constraints = [
+            # "required iff set" needs both a null check AND a non-blank check on
+            # risk_currency (round-5 code review): __isnull=False alone let
+            # risk_currency="" through, so planned_risk_amount="100.00",
+            # risk_currency="" satisfied the constraint despite being meaningless.
             models.CheckConstraint(
                 condition=(
                     models.Q(planned_risk_amount__isnull=True, risk_currency__isnull=True)
-                    | models.Q(planned_risk_amount__isnull=False, risk_currency__isnull=False)
+                    | (
+                        models.Q(planned_risk_amount__isnull=False)
+                        & models.Q(risk_currency__isnull=False)
+                        & ~models.Q(risk_currency="")
+                    )
                 ),
                 name="journalentry_risk_currency_required_with_amount",
             ),

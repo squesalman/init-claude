@@ -69,7 +69,7 @@ Immutable by convention (never `UPDATE`d; corrections delete+recreate).
 | `price` | `NUMERIC(20,10)` | no | `CHECK (price >= 0)` |
 | `contract_multiplier` | `NUMERIC(20,10)` | no, default 1 | point value per contract, stored per fill so a contract-spec change never rewrites old P&L. `CHECK (contract_multiplier > 0)` — `execution_contract_multiplier_positive`, added round-3 code review: it's the P&L multiplier, so 0 or negative would silently corrupt every derived trade, and `quantity`/`price` in the same constraints list already had this protection while this column didn't |
 | `fees` | `NUMERIC(19,4)` | no, default 0 | total cost of this fill |
-| `currency` | `VARCHAR(3)` | no | ISO 4217, applies to `fees` and derived P&L |
+| `currency` | `VARCHAR(3)` | no | ISO 4217, applies to `fees` and derived P&L. `CHECK (currency <> '')` — `execution_currency_not_blank`, added round-5 code review: unlike `quantity`/`price`/`contract_multiplier` in the same constraints list, `currency` had no non-empty guard at all (no `CheckConstraint`, no `full_clean()` call site on this write path), so a money-bearing execution could be saved with `currency=""`, silently violating CLAUDE.md's "store currency with every amount" |
 | `executed_at` | `TIMESTAMPTZ` | no | UTC in DB, rendered in `user.timezone` |
 | `source` | `VARCHAR(8)` | no | `CHECK (source IN ('manual','import'))` |
 | `raw_import_row_id` | `BIGINT FK → journal_rawimportrow` | yes | `ON DELETE SET NULL`; `NULL` for manual |
@@ -109,13 +109,17 @@ One per trade, keyed by the execution that opened it.
 | `rules_followed` | `BOOLEAN` | yes, no default | `NULL` = not yet answered. "Journaled" ≡ `rules_followed IS NOT NULL` |
 | `stop_price` | `NUMERIC(20,10)` | yes | R-multiple input |
 | `planned_risk_amount` | `NUMERIC(19,4)` | yes | R-multiple input |
-| `risk_currency` | `VARCHAR(3)` | yes | required iff `planned_risk_amount` is set |
+| `risk_currency` | `VARCHAR(3)` | yes | required (non-null **and** non-blank) iff `planned_risk_amount` is set |
 | `created_at`, `updated_at` | `TIMESTAMPTZ` | no | `auto_now_add` / `auto_now` |
 
 Constraints/indexes:
 
-- `CHECK`: `risk_currency` is set if and only if `planned_risk_amount` is set
-  (`journalentry_risk_currency_required_with_amount`).
+- `CHECK`: `risk_currency` is set (non-null and non-blank) if and only if
+  `planned_risk_amount` is set (`journalentry_risk_currency_required_with_amount`).
+  **Tightened round-5 code review**: the original constraint only tested
+  `risk_currency__isnull`, so `planned_risk_amount="100.00", risk_currency=""` satisfied
+  it despite being meaningless — `""` is not null but isn't a currency either. Added
+  `~Q(risk_currency="")` to the "amount set" branch.
 - `(user_id, rules_followed)` — `journalentry_user_flag_idx`. Covers all three of story 6's
   rule-followed filter states in one index: yes, no, and "not journaled"
   (`WHERE rules_followed IS NULL`, which a composite btree serves directly on the second
@@ -141,9 +145,16 @@ from using the unscoped default manager and leaking cross-user data): `UserScope
 `get_queryset()` now raises `RuntimeError` unconditionally, so `Model.objects.all()`,
 `.filter()`, `.get()`, etc. all fail loudly instead of silently returning every user's rows.
 `.for_user(user)` bypasses the raise (it calls `super().get_queryset()` directly) and remains
-the one sanctioned read path. `.create()` is separately exempted on the manager — it isn't a
-read and can't leak (the `user` FK is `NOT NULL` and always passed explicitly), so blocking it
-would break the ordinary `Model.objects.create(user=..., ...)` idiom.
+the one sanctioned read path. `.create()`, `.get_or_create()`, and `.update_or_create()` are
+separately exempted on the manager — none of them are a read and none can leak (the `user` FK
+is `NOT NULL` and always passed explicitly as a kwarg), so blocking them would break the
+ordinary `Model.objects.create(user=..., ...)` idiom. `get_or_create`/`update_or_create` were
+missed in the original hardening and added in **round-5 code review**: they proxied through
+the raising `get_queryset()`, contradicting the manager's own docstring claim that `.create()`
+was the one exception, and directly blocked the idempotent-import pattern CLAUDE.md requires
+("dedupe by broker + execution id") — the natural implementation is
+`Execution.objects.get_or_create(user=..., broker=..., broker_execution_id=...,
+defaults={...})`.
 
 Each `UserOwned` subclass also gets a second manager, `unscoped` (a plain
 `models.Manager()`). `Meta.base_manager_name = "unscoped"` and `Meta.default_manager_name =
@@ -197,22 +208,48 @@ fetch), and raises `CrossTenantForeignKeyError` (a `ValueError` subclass) if it 
 failure mode on a different model). Nullable cross-FKs (`Execution.raw_import_row`) are skipped
 when unset.
 
-**Perf fix, round-4 code review**: `save()` accepts `update_fields` and only re-runs the check
-(one `SELECT` per guarded FK) when `update_fields is None` (a full save/create) or when the
-`update_fields` list actually includes one of the guarded FK field names. A plain-field update
-like `entry.save(update_fields=["note"])` skips the check entirely — no FK column is changing,
-so there's nothing new to verify. Verified in `journal/tests.py` (below) by mocking
+**Perf fix, round-4 code review**: `save()` accepts `update_fields` (read out of `**kwargs`,
+not a named parameter — see below) and only re-runs the check (one `SELECT` per guarded FK)
+when `update_fields is None` (a full save/create) or when the `update_fields` list actually
+includes one of the guarded FK field names. A plain-field update like
+`entry.save(update_fields=["note"])` skips the check entirely — no FK column is changing, so
+there's nothing new to verify. Verified in `journal/tests.py` (below) by mocking
 `_check_cross_tenant_fks` and asserting it's not called for a `note`-only `update_fields` save,
 but is called for both an `update_fields=["opening_execution"]` save and a full save.
+**Extended round-5 code review**: matching only checked `field.name` (e.g.
+`"opening_execution"`), but Django's `update_fields` also accepts a FK's `attname` (e.g.
+`"opening_execution_id"`) — `save(update_fields=["opening_execution_id"])` skipped the check
+entirely before this fix. Now matches both.
 
-**Known gap, documented rather than built for (round-4 code review)**: this guard is
-`save()`-only. Django never calls `save()` for `bulk_create`/`bulk_update`, so
-`Model.unscoped.bulk_create(...)` bypasses it entirely — there is no protection against a
-cross-tenant FK inserted via a bulk write. No caller does bulk writes yet (no importer exists
-in this PR), so no bulk-write guard is built speculatively. **Any future bulk-write code (the
-Topstep importer) must either loop per-row `.save()` or add its own explicit ownership check
-before calling `bulk_create`/`bulk_update`.** This is also called out as a comment directly on
-`UserOwned.unscoped` in `journal/models.py`.
+**Signature bug, round-5 code review**: `save()` was declared as
+`save(self, *args, update_fields=None, **kwargs)`, which collides with Django's real
+`Model.save(force_insert=False, force_update=False, using=None, update_fields=None)` — all
+four of Django's params are positional-capable. A call like `save(False, False, None,
+["note"])` (valid against Django's real signature, if deprecated in 5.2 in favor of keywords)
+put `["note"]` into this override's `*args` while its own named `update_fields` stayed `None`,
+then `super().save(*args, update_fields=update_fields, **kwargs)` supplied `update_fields`
+both positionally (still sitting in `args`) and as a keyword, raising `TypeError`. Fixed by not
+declaring `update_fields` as a named parameter at all — it's read via
+`kwargs.get("update_fields")`, and `*args, **kwargs` are forwarded to `super().save()`
+unchanged.
+
+**Known gap, documented rather than built for (round-4 code review, extended round-5)**: this
+guard is `save()`-only. Django never calls `save()` for `bulk_create`/`bulk_update`/
+`QuerySet.update()`, so `Model.unscoped.bulk_create(...)`, `.bulk_update(...)`, and
+`Model.unscoped.filter(...).update(...)` all bypass it entirely — there is no protection
+against a cross-tenant FK inserted or changed via any of these. No caller does bulk writes yet
+(no importer exists in this PR), so no bulk-write guard is built speculatively. **Any future
+bulk-write code (the Topstep importer) must either loop per-row `.save()` or add its own
+explicit ownership check before calling `bulk_create`/`bulk_update`/`.update()`.** This is also
+called out as a comment directly on `UserOwned.unscoped` in `journal/models.py`.
+
+**Admin known gap, documented round-5 code review, nothing registered yet**:
+`Meta.default_manager_name = "unscoped"` means Django admin's `ModelAdmin.get_queryset()`
+(which reads `_default_manager`) would show every tenant's rows the moment any `UserOwned`
+model is registered in `journal/admin.py` or `accounts/admin.py` — both are currently empty
+stubs. Registering one requires an explicit `get_queryset()` override on that `ModelAdmin`,
+scoped to the current request's user. Flagged with a comment in both `admin.py` files; not
+built now since nothing is registered.
 
 RLS is not enabled (ADR-0002's trigger — before any non-author account exists — hasn't fired).
 Every table already carries the plain `user_id` column a policy would need, so enabling it
@@ -239,9 +276,25 @@ Verified in `journal/tests.py`:
   created at all.
 - `test_save_update_fields_skips_fk_check_unless_a_guarded_field_is_touched` mocks
   `_check_cross_tenant_fks` and asserts it's skipped for a `note`-only `update_fields`
-  save, but still runs for an `update_fields=["opening_execution"]` save and a full save.
+  save, but still runs for an `update_fields=["opening_execution"]` save, an
+  `update_fields=["opening_execution_id"]` save (the attname variant, round-5), and a
+  full save.
+- `test_save_accepts_django_real_positional_signature` calls
+  `entry.save(False, False, None, ["note"])` — Django's real, deprecated-but-still-valid
+  positional `save()` signature — and asserts it doesn't raise `TypeError`.
+- `test_get_or_create_and_update_or_create_work_on_default_manager` exercises the exact
+  idempotent-import shape CLAUDE.md requires directly on `Model.objects`.
+- `test_journalentry_risk_currency_blank_rejected_when_amount_set` and
+  `test_execution_currency_blank_rejected` assert `IntegrityError` on
+  `risk_currency=""` (with `planned_risk_amount` set) and `currency=""` respectively.
 - `test_execution_contract_multiplier_must_be_positive` asserts `IntegrityError` on
   `contract_multiplier=0`.
+
+`config/tests.py` (new, round-5) covers `SECRET_KEY`'s fail-closed logic — necessarily via
+subprocess, since it's import-time settings behavior that can't be re-exercised once a test
+process has already imported settings once: `test_secret_key_required_when_debug_false_and_unset`,
+`test_secret_key_falls_back_to_dev_default_when_debug_true`,
+`test_secret_key_from_env_used_when_debug_false`.
 
 ### Migration history
 
@@ -274,10 +327,36 @@ long-standing source of surprise (`'USD' = 'USD '` behavior, `rstrip`-on-read se
 none of that padding behavior. Kept as documented deviation rather than "fixed" to a type
 Postgres itself steers people away from.
 
+## Application configuration (`config/settings.py`)
+
+Not part of the schema, but tracked here since this doc has become the running log for this
+task's code-review fixes:
+
+- `DEBUG`, `ALLOWED_HOSTS`, and (**round-5 code review**) `SECRET_KEY` all fail closed on a
+  missing/misconfigured env var, rather than silently defaulting to something permissive.
+  `SECRET_KEY` was the odd one out: it fell back to a hardcoded, publicly-committed dev value
+  unconditionally, so a prod `.env` missing `DJANGO_SECRET_KEY` would silently boot with a key
+  anyone reading the public repo could use to forge sessions/CSRF tokens/password-reset tokens.
+  Now: if `DJANGO_SECRET_KEY` is unset, the dev fallback is used only when `DEBUG=True`;
+  `DEBUG=False` with no `DJANGO_SECRET_KEY` raises `ImproperlyConfigured` at import time,
+  refusing to start. Verified via subprocess in `config/tests.py` (see the "Tenant isolation"
+  test list above) for all three cases: unset+`DEBUG=False` (raises), unset+`DEBUG=True` (dev
+  fallback), and set+`DEBUG=False` (uses the real value). Required reordering `DEBUG` above
+  `SECRET_KEY` in the file, since the fail-closed check needs to know `DEBUG` first.
+- `UserManager._create_user()` has a known, accepted TOCTOU: two concurrent signups with the
+  same email can both pass the pre-save uniqueness check before either commits. Not fixed —
+  the DB `UniqueConstraint(Lower("email"))` already prevents the actual duplicate row
+  regardless (one of the two will hit `IntegrityError`); the gap is only that `full_clean()`'s
+  `ValidationError` isn't guaranteed to be what the loser sees. Marked with a `# ponytail:`
+  comment on `_create_user()` — the eventual signup view needs to catch `IntegrityError`
+  alongside `ValidationError`, but there's no view yet to catch anything in.
+
 ## Known gaps (not this task's scope)
 
 - No `Meta.db_table` overrides needed — Django's default naming
   (`<app_label>_<model>` lowercase) already matches ADR-0003's table names exactly.
 - `journal/matching.py` (`derive_trades()`) does not exist yet — `backend-engineer`'s task,
   per ADR-0003 follow-up 2.
-- No admin registration, views, forms, or API — explicitly out of scope for this task.
+- No admin registration, views, forms, or API — explicitly out of scope for this task. See
+  the "Admin known gap" note under Tenant isolation above for what registering a `UserOwned`
+  model will require.

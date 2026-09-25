@@ -38,6 +38,8 @@ class UserManager(BaseUserManager):
         )
 
     def _create_user(self, email: str, password: str | None, **extra_fields):
+        # ponytail: known TOCTOU, DB constraint backstops it; view layer should catch
+        # IntegrityError alongside ValidationError when the signup view is built.
         if not email:
             # ValidationError, not ValueError (code review): every other invalid-field
             # case here is caught via full_clean() and raises ValidationError, so a

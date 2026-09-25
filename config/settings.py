@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -20,18 +22,31 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-# ponytail: dev-only fallback so `runserver`/tests work with zero setup; prod sets
-# DJANGO_SECRET_KEY via the VPS .env per ADR-0002 and must not use this default.
-SECRET_KEY = os.environ.get(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-hx4@t%@gbhr)_sk5)rregy-%b$#z50r0vonm0k5=s^4s-mh)g@',
-)
-
 # SECURITY WARNING: don't run with debug turned on in production!
 # Fail closed: an unset/misconfigured DJANGO_DEBUG on a real deployment must not
 # silently turn DEBUG on. Dev sets DJANGO_DEBUG=true explicitly (.env.example).
+# Computed before SECRET_KEY below, which needs to know this to fail closed too.
 DEBUG = os.environ.get('DJANGO_DEBUG', 'false').lower() == 'true'
+
+# SECURITY WARNING: keep the secret key used in production secret!
+# Fail closed (round-5 code review): DEBUG and ALLOWED_HOSTS already fail closed when
+# their env vars are unset, but SECRET_KEY fell back to a hardcoded, publicly-committed
+# dev value unconditionally — if prod's .env is missing DJANGO_SECRET_KEY, the app would
+# silently boot with a key anyone reading this public repo can use to forge sessions,
+# CSRF tokens, and password-reset tokens. The dev fallback is now only used when
+# DEBUG=True; a real deployment (DEBUG=False) with no DJANGO_SECRET_KEY refuses to start.
+_secret_key = os.environ.get('DJANGO_SECRET_KEY')
+if not _secret_key:
+    if DEBUG:
+        # ponytail: dev-only fallback so `runserver`/tests work with zero setup; prod
+        # sets DJANGO_SECRET_KEY via the VPS .env per ADR-0002 and must not use this.
+        _secret_key = 'django-insecure-hx4@t%@gbhr)_sk5)rregy-%b$#z50r0vonm0k5=s^4s-mh)g@'
+    else:
+        raise ImproperlyConfigured(
+            'DJANGO_SECRET_KEY must be set when DEBUG is False. Refusing to start with '
+            'the public dev fallback key on what looks like a real deployment.'
+        )
+SECRET_KEY = _secret_key
 
 ALLOWED_HOSTS = [
     h.strip()
@@ -48,8 +63,10 @@ AUTH_USER_MODEL = 'accounts.User'
 # substitute" for CITEXT) and accounts/models.py.
 # models.W045: journal.ImportBatch.raw_file's size-cap CHECK constraint uses RawSQL
 # (octet_length), which Django can't pre-validate in full_clean(). Expected and covered:
-# journal/models.py's validate_raw_file_size validator handles the full_clean() path, and
-# the DB constraint is the backstop for every other write path. See journal/models.py.
+# the field's own max_length= gives it Django's built-in MaxLengthValidator, which
+# handles the full_clean() path, and the DB constraint is the backstop for every other
+# write path. See journal/models.py (stale reference to a since-removed hand-written
+# validate_raw_file_size validator corrected here, round-5 code review).
 SILENCED_SYSTEM_CHECKS = ['auth.E003', 'models.W045']
 
 
