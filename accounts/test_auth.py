@@ -296,3 +296,19 @@ def test_user_b_sees_none_of_user_a_through_the_views_added_here(client):
     # A's session is untouched by B's requests, and B's cookie never authenticates as A.
     assert client_a.get("/trades/").wsgi_request.user == a
     assert Client().get("/trades/").status_code == 302
+
+
+# --- error-report hygiene (security review M1) --------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "path, data, fields",
+    [
+        ("/signup/", signup_data(), ["password1", "password2"]),
+        ("/login/", {"email": "x@example.com", "password": GOOD_PW}, ["password"]),
+    ],
+)
+def test_password_fields_are_marked_sensitive_for_error_reports(client, path, data, fields):
+    resp = client.post(path, data)
+    assert sorted(resp.wsgi_request.sensitive_post_parameters) == fields

@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.shortcuts import redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
 
 from accounts import copy
@@ -15,6 +16,7 @@ def home(request):
     return redirect("trades" if request.user.is_authenticated else "login")
 
 
+@sensitive_post_parameters("password1", "password2")
 def signup(request):
     if request.user.is_authenticated:
         return redirect(settings.LOGIN_REDIRECT_URL)
@@ -44,6 +46,7 @@ def _safe_next(request, value):
     return value if ok else ""
 
 
+@sensitive_post_parameters("password")
 def login_view(request):
     if request.user.is_authenticated:
         return redirect(settings.LOGIN_REDIRECT_URL)
