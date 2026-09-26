@@ -1,4 +1,6 @@
+all_trades_export.csv
 *.csv
+.claude/worktrees/
 
 # Python / Django / uv
 __pycache__/

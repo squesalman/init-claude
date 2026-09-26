@@ -68,6 +68,8 @@ Default pipeline for a new feature — skip steps that don't apply:
 ### Branching for code-writing agents
 Before delegating to a code-writing agent (`backend-engineer`, `frontend-engineer`, `database-engineer`, `qa-engineer`), the orchestrator creates a branch and worktree for that task first, and the agent works only inside that worktree — never directly on `main`. Doc-only agents (`architect`, `product-manager`, `trading-domain-expert`, `behavior-analyst`, `ux-designer`, `security-reviewer`) keep writing straight to `docs/` on `main`, no branch needed.
 
+Workers never push to `main` or merge their own branch. Once a worker's task is done, the orchestrator pushes its branch and opens a PR (`gh pr create`). The PR is reviewed — via the `code-review` skill for correctness, `ponytail-review` for over-engineering, or the orchestrator directly — and only the orchestrator merges the PR into `main` afterward.
+
 ### Delegation rules
 - Agents start with no memory of this conversation. Every prompt must state the goal, point to the relevant docs/files, and say what to return.
 - Handoffs happen through files in `docs/`, not chat. Tell each agent which doc to read and which to write.
@@ -80,7 +82,7 @@ Before delegating to a code-writing agent (`backend-engineer`, `frontend-enginee
 
 ## Working conventions
 - Docs layout: `docs/product/`, `docs/adr/` (`NNNN-title.md`), `docs/domain/`, `docs/behavior/`, `docs/design/`, `docs/data/` (data dictionary).
-- Use the superpowers skills where they fit: `brainstorming` before designing a new feature, `writing-plans` for multi-step work, `test-driven-development` for calculations and parsers, `systematic-debugging` for bugs, `verification-before-completion` before claiming anything is done.
+- Use the superpowers skills where they fit: `brainstorming` before designing a new feature, `writing-plans` for multi-step work, `test-driven-development` for all code-writing agents (not just calculations/parsers) — write the test first, and leave it in the repo; a fix verified only by a throwaway script that gets deleted afterward doesn't count as tested, `systematic-debugging` for bugs, `verification-before-completion` before claiming anything is done.
 - Report results faithfully: say what was run, what passed or failed, and what was not verified.
 - Keep changes small and focused; no speculative abstractions.
 - Update this file when the stack, commands, or agent roster changes.

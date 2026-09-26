@@ -95,7 +95,7 @@ to secure or scope per user.
 | `import_batch_id` | `BIGINT NOT NULL REFERENCES journal_importbatch ON DELETE CASCADE` | |
 | `line_number` | `INTEGER NOT NULL` | 1-based, as in the file |
 | `raw` | `JSONB NOT NULL` | the CSV row as `{header: cell}`, strings only, **no coercion** |
-| `status` | `VARCHAR(16) NOT NULL` | `imported` / `skipped_duplicate` / `failed` |
+| `status` | `VARCHAR(20) NOT NULL` | `imported` / `skipped_duplicate` / `failed` |
 | `error` | `TEXT NOT NULL DEFAULT ''` | why it failed, shown to the user (story 3: never silently dropped) |
 
 `UNIQUE (import_batch_id, line_number)`.
