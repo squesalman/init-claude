@@ -93,6 +93,11 @@ trades appear without manual re-entry.
   a hard failure of the whole file.
 - Imported trades are scoped to the importing user only and appear in their trade list
   alongside manual entries with no visual distinction required for MVP.
+- User can delete an import batch (with confirmation) to undo an import, e.g. a file
+  uploaded under the wrong Account label. Added after ADR-0004: its recovery path for the
+  duplicate-batch risk depends on this. Semantics for executions that already have a
+  journal entry are an open architect decision (see `docs/data/follow-ups.md` row 13).
+  Spec: `docs/product/features/import-account-label.md`.
 
 **Out of scope:** any broker other than Topstep; scheduled/automatic re-import; email or
 API-based import.

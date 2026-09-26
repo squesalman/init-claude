@@ -16,6 +16,7 @@ Deferred on purpose. Each has a trigger: do it when that happens, not before.
 | 10 | **`SILENCED_SYSTEM_CHECKS = ['auth.E003']`** is project-wide. Replace with a custom check that asserts the `Lower(email)` unique constraint exists. | Any change to the email constraint | backend-engineer | `config/settings.py` |
 | 11 | **Redundant CHECKs**: `execution_currency_not_blank` and the `~Q(risk_currency='')` term are covered by the currency regex CHECK. | Next migration on these tables | database-engineer | `journal/models.py` |
 | 12 | **`available_timezones()` walks the tz db at import** (every `manage.py`, pytest, worker start). Validate with `ZoneInfo(value)` in try/except, or cache lazily. | Startup time annoys | backend-engineer | `accounts/models.py` |
+| 13 | **Batch delete semantics (needs architect decision, blocks the batch-delete feature).** `RawImportRow.import_batch` is CASCADE, but `Execution.raw_import_row` is SET_NULL, so deleting an `ImportBatch` removes raw rows and leaves its executions in place. Deleting the executions is blocked by `JournalEntry.opening_execution` RESTRICT if the user already journaled them, which would also destroy notes. Decide: what does 'delete this import' remove, what happens to journaled trades, and what the confirm dialog says. | Before building batch delete | architect (ADR), then database-engineer/backend-engineer | `journal/models.py` on_delete rules |
 
 ## Row 6 migration spec (ADR-0004)
 
