@@ -33,7 +33,7 @@ is mine alone.
 - User A cannot view, edit, filter into, or infer the existence of User B's trades,
   journal entries, or rules text via any URL, ID guess, or API response.
 - One automated test enumerates every user-owned model and asserts a second user's
-  session cannot retrieve its rows (per ADR-0001's user-scoping chokepoint).
+  session cannot retrieve its rows (per ADR-0002's user-scoping chokepoint).
 
 **Out of scope:** password reset/forgot-password flow, email verification, 2FA, social
 login. (Assumption — flagged below; add password reset before this has real users
@@ -61,7 +61,7 @@ journal something the same day I take it.
 - Submitted times are interpreted in the user's configured timezone and stored as UTC;
   displayed back in the user's timezone.
 - A saved trade appears immediately in the trade list (no async processing, no queue —
-  compute-on-read per ADR-0001).
+  compute-on-read per ADR-0002).
 - Required fields are the minimum needed to compute P&L and show the trade in the list;
   nothing beyond that is required (journaling-friction principle).
 
@@ -83,7 +83,7 @@ trades appear without manual re-entry.
 
 **Acceptance criteria:**
 - User uploads a Topstep-format CSV; the app parses it synchronously within the request
-  (no background job, per ADR-0001) and shows a result summary (rows imported, rows
+  (no background job, per ADR-0002) and shows a result summary (rows imported, rows
   skipped, rows failed with reasons).
 - Import is idempotent: re-uploading the same file (or an overlapping export) creates no
   duplicate trades — dedupe key is broker + execution/trade id, per `CLAUDE.md`.
@@ -180,7 +180,7 @@ with their notes, rule-flag, and basic stats, so I can review my history.
 - Filterable by at least: date range, instrument, rule-followed (yes/no/not journaled),
   win/loss.
 - List and filters work via standard server-rendered pagination/requests (htmx partial
-  updates per ADR-0001) — no client-side SPA state.
+  updates per ADR-0002) — no client-side SPA state.
 - List only ever shows the logged-in user's trades (ties back to story 1's isolation
   test).
 - Above the list, three account-level stats are shown, recomputed on read from the
@@ -214,7 +214,7 @@ at expected volume), `frontend-engineer` (templates + htmx).
 - Password reset, email verification, 2FA, social login (see story 1 assumption).
 - CSV/data export, saved filters, charts/graphs.
 - Background jobs / async import — everything computes synchronously on read or on
-  request, per ADR-0001.
+  request, per ADR-0002.
 
 ## Open questions
 

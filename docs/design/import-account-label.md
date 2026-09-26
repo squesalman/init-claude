@@ -558,7 +558,7 @@ No JS: the button is enabled, and the server rejects an unticked submit with the
 Resolved by the 2026-09-26 rulings: datalist only (was A), `/imports/` list and detail in MVP (was B), delete from banner and row menu (was C), notes semantics (was D, ADR-0005). Still open:
 
 For `backend-engineer`:
-- **E.** Is a whole import one transaction, so "nothing was saved" on upload failure is true? Confirm before the frontend ships that wording.
+- **E. RESOLVED (ADR-0006, Accepted).** Yes: one `transaction.atomic()` per upload, so "nothing was saved" on failure is true. A concurrent duplicate upload rolls back the whole upload and the user is told to upload again. The wording can ship.
 - **F.** Confirm the detail page can compute on read: same hash, earlier batch, and its label (from executions). Also the reverse for the dialog's "original-batch line": later batches with the same hash that imported nothing.
 - **G.** htmx partial swap of `AccountField` on a server validation error, so the file input stays selected.
 - **H. RESOLVED (user, 2026-09-26: H1).** Accept "not recorded (nothing was imported)" for a batch that imported no executions. No `ImportBatch` label column; no schema change.

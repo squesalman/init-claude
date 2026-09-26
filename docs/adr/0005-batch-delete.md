@@ -1,6 +1,6 @@
 # ADR-0005: "Delete this import" (batch delete) semantics
 
-- **Status:** Accepted (user ruling 2026-09-26: option (a), delete journaled entries behind a counted tick box)
+- **Status:** Accepted (user ruling 2026-09-26: option B in the table below, delete journaled entries behind a counted tick box)
 - **Date:** 2026-09-26
 - **Deciders:** architect (proposed), user (approved 2026-09-26: "a, yes, yes, yes")
 - **Depends on:** [ADR-0003](0003-data-model.md) (on_delete rules, `for_user()`), [ADR-0004](0004-topstep-dedupe-and-pairing.md)
@@ -166,5 +166,7 @@ Note export. Deleting single rows or single trades from a batch. Editing a batch
 
 ## Open question for the user
 
-1. **Approve option B** (delete journaled trades too, behind a counted checkbox)? The alternative is
-   A (block until the user clears those journal entries by hand). C is not recommended.
+1. **RESOLVED 2026-09-26: option B approved** (delete journaled trades too, behind a counted
+   checkbox). The user's reply "a, yes, yes, yes" labelled it "(a)" in the question as it was
+   asked at the time; the option table above calls the same choice B. A (block) and C (keep
+   journaled trades) stay rejected.

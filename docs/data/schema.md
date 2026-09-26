@@ -387,10 +387,11 @@ Verified in `journal/tests.py`:
 constructs a user with a non-ASCII local part (bypassing `full_clean()`, same pattern as
 `test_email_uniqueness_is_case_insensitive_at_db_level`) and asserts `get_by_natural_key`
 still finds it with the exact stored email.
-`test_get_or_create_and_update_or_create_are_not_supported` (round-8, replaces four
-round-7 tests that exercised the since-removed hand-rolled implementation — see the
-`email` column note above) asserts both raise `NotImplementedError` and that nothing is
-created.
+`test_save_rejects_raw_password_on_every_write_path` (round-11, `accounts/tests.py`)
+asserts `create(password=...)`, the stock `get_or_create` create path, and
+`setattr(user, "password", ...)` + `save()` all raise `ValueError` from the `User.save()`
+guard. The earlier `UserManager.get_or_create`/`update_or_create` `NotImplementedError` stubs
+and their test (rounds 7-8) were removed; see follow-ups row 9.
 
 `config/tests.py` (new, round-5) covers `SECRET_KEY`'s fail-closed logic — necessarily via
 subprocess, since it's import-time settings behavior that can't be re-exercised once a test
@@ -404,6 +405,12 @@ process has already imported settings once: `test_secret_key_required_when_debug
 `test_secret_key_real_value_not_starting_with_django_insecure_still_boots`.
 
 ### Migration history
+
+**Current state (after PRs #1 to #3, 2026-09-26):** `journal` has `0001_initial`,
+`0002_currency_format_and_import_id_checks` and `0003_topstep_dedupe_account_label` (ADR-0004);
+`accounts` has `0001_initial` and `0002_base_currency_format_check`. Now that PR #1 is merged,
+migrations are additive and are not squashed. Everything below is the pre-merge squash history
+of PR #1, kept for history; its "one migration each" statements were true only at that point.
 
 `journal`'s migrations were squashed to a single `0001_initial.py` twice: once in round-4
 code review, and again in a **final pre-merge squash** after round-6 landed (this note
