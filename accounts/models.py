@@ -1,6 +1,7 @@
 from zoneinfo import available_timezones
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
+from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX, identify_hasher
 from django.contrib.auth.models import PermissionsMixin
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
@@ -81,39 +82,6 @@ class UserManager(BaseUserManager):
         user.save(using=self._db)
         return user
 
-    def get_or_create(self, defaults=None, **kwargs):
-        # Round-7 added a hand-rolled get_or_create()/update_or_create() here to close a
-        # full_clean()-bypass gap, but round 8 found the hand-rolling itself was buggy:
-        # update_or_create()'s update path did setattr() straight onto the instance, so
-        # defaults={"password": "..."} wrote a PLAINTEXT password (the create path
-        # correctly used set_password() via _create_user(), the update path didn't);
-        # both methods did a case-sensitive self.get(**kwargs) while uniqueness is
-        # case-insensitive (UniqueConstraint(Lower("email"))), so an existing
-        # "Foo@Example.com" wasn't found by get_or_create(email="foo@example.com") and
-        # fell through to create, hitting an uncaught IntegrityError; and neither method
-        # had Django's own transaction wrapping/retry-on-race or lookup-suffix stripping
-        # (_extract_model_params). Root cause: nothing in this codebase actually calls
-        # either method — this was closing a hypothetical gap, and hand-rolling Django's
-        # get_or_create/update_or_create semantics correctly is real surface area for
-        # zero current benefit. Removed the override entirely; both now refuse to run.
-        # If/when a real caller needs this (e.g. an admin-assisted password reset flow),
-        # build it correctly at that point, scoped to the actual call shape needed.
-        raise NotImplementedError(
-            "User.objects.get_or_create() is not supported — use "
-            "User.objects.create_user() for creation. If you need get-or-create "
-            "semantics, call User.objects.get_by_natural_key()/objects.get() first and "
-            "handle DoesNotExist yourself."
-        )
-
-    def update_or_create(self, defaults=None, create_defaults=None, **kwargs):
-        raise NotImplementedError(
-            "User.objects.update_or_create() is not supported — use "
-            "User.objects.create_user() for creation and an explicit "
-            "user.set_password()/other field updates + user.full_clean() + user.save() "
-            "for updates. (In particular, never setattr(user, 'password', raw_value) — "
-            "that writes a plaintext password.)"
-        )
-
     def create_user(self, email: str, password: str | None = None, **extra_fields):
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
@@ -170,3 +138,22 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self) -> str:
         return self.email
+
+    def save(self, *args, **kwargs):
+        # Root-cause guard against plaintext passwords (round 11): create(password=...),
+        # setattr(user, "password", ...) and stock get_or_create/update_or_create all
+        # reach here, so one check covers them all instead of blocking methods by name.
+        # ponytail: bulk_create/QuerySet.update bypass save(); nothing calls them on User.
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            kwargs["update_fields"] = update_fields = frozenset(update_fields)
+        if update_fields is None or "password" in update_fields:
+            if not self.password.startswith(UNUSABLE_PASSWORD_PREFIX):
+                try:
+                    identify_hasher(self.password)
+                except ValueError:
+                    raise ValueError(
+                        "User.password must be a hash: call set_password() or use "
+                        "User.objects.create_user()."
+                    ) from None
+        super().save(*args, **kwargs)

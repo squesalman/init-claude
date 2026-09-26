@@ -91,27 +91,46 @@ def test_create_user_rejects_case_variant_duplicate_email_via_full_clean():
 
 
 @pytest.mark.django_db
-def test_get_or_create_and_update_or_create_are_not_supported():
+def test_save_rejects_raw_password_on_every_write_path():
     """
-    Round-7 added a hand-rolled get_or_create()/update_or_create() to close a
-    full_clean()-bypass gap; round 8 found the hand-rolling itself was buggy:
-    update_or_create()'s update path did setattr() straight onto the instance, so
-    defaults={"password": "..."} would have written a PLAINTEXT password; both methods
-    did a case-sensitive self.get(**kwargs) lookup while uniqueness is enforced
-    case-insensitively, so an existing "Foo@Example.com" wasn't found by
-    get_or_create(email="foo@example.com") and fell through to create, hitting an
-    uncaught IntegrityError; and neither had Django's own transaction/retry-on-race or
-    lookup-suffix stripping. Root cause: nothing in this codebase calls either method —
-    removed entirely rather than hand-rolled correctly for a caller that doesn't exist
-    yet. Both now refuse to run.
+    Round-11 follow-up: the manager's get_or_create/update_or_create stubs blocked one
+    route to a plaintext password, but create(password=...), setattr() and Django's own
+    get_or_create create path all reached the DB unhashed. One guard in User.save()
+    closes them all.
     """
-    with pytest.raises(NotImplementedError):
-        User.objects.get_or_create(email="x@example.com", defaults={"password": "x"})
+    with pytest.raises(ValueError):
+        User.objects.create(email="raw1@example.com", password="plaintext")
+    with pytest.raises(ValueError):
+        User.objects.get_or_create(email="raw2@example.com", defaults={"password": "plaintext"})
+    with pytest.raises(ValueError):
+        User.objects.get_or_create(email="raw3@example.com")  # password '' (never hashed)
 
-    with pytest.raises(NotImplementedError):
-        User.objects.update_or_create(email="x@example.com", defaults={"password": "x"})
+    user = User.objects.create_user(email="raw4@example.com", password="x")
+    user.password = "plaintext"  # the setattr route
+    with pytest.raises(ValueError):
+        user.save()
+    with pytest.raises(ValueError):
+        user.save(update_fields=(f for f in ["password"]))  # one-shot iterable too
 
-    assert not User.objects.filter(email="x@example.com").exists()
+    assert not User.objects.filter(email__startswith="raw", email__lt="raw4").exists()
+    assert User.objects.get(email="raw4@example.com").password != "plaintext"
+
+
+@pytest.mark.django_db
+def test_save_guard_leaves_normal_django_auth_flows_alone(client):
+    """create_user, unusable passwords, set_password, login (which saves last_login via
+    update_fields and may upgrade the hash) all keep working."""
+    user = User.objects.create_user(email="ok@example.com", password="s3cret-pw")
+    assert User.objects.create_user(email="nopw@example.com").has_usable_password() is False
+
+    user.set_password("another-pw")
+    user.save()
+    assert client.login(username="ok@example.com", password="another-pw")
+    user.refresh_from_db()
+    assert user.last_login is not None
+
+    # a save that doesn't write `password` never inspects it
+    user.save(update_fields=["timezone"])
 
 
 @pytest.mark.django_db
