@@ -7,8 +7,10 @@ ModelForm on user-owned data must subclass `journal.forms.UserScopedModelForm` a
 expose `user` as a field. A grep test bans the unscoped query patterns in app code.
 """
 
-import importlib.util
+import io
+import pkgutil
 import re
+import tokenize
 from importlib import import_module
 from pathlib import Path
 
@@ -40,22 +42,32 @@ def _unscoped_forms(form_classes):
     ]
 
 
+# First-party packages: the tripwire imports all their modules and the grep test scans them.
+_PACKAGES = ("accounts", "journal", "config")
+
+
+def _is_test_or_migration(module: str) -> bool:
+    leaf = module.rsplit(".", 1)[-1]
+    return leaf == "tests" or leaf.startswith("test_") or ".migrations" in module
+
+
+def _all_subclasses(cls):
+    for sub in cls.__subclasses__():
+        yield sub
+        yield from _all_subclasses(sub)
+
+
 def _project_model_forms():
-    for cfg in apps.get_app_configs():
-        if not cfg.name.startswith(("journal", "accounts")):
-            continue
-        mod_name = f"{cfg.name}.forms"
-        if importlib.util.find_spec(mod_name) is None:
-            continue
-        for obj in vars(import_module(mod_name)).values():
-            if (
-                isinstance(obj, type)
-                and issubclass(obj, forms.ModelForm)
-                and obj.__module__ == mod_name
-                and getattr(obj, "_meta", None)
-                and obj._meta.model
-            ):
-                yield obj
+    # Import every first-party module so a ModelForm defined anywhere (views, services...)
+    # exists as a subclass, then walk ModelForm's subclass tree.
+    for pkg in _PACKAGES:
+        for mod in pkgutil.walk_packages(import_module(pkg).__path__, f"{pkg}."):
+            if not _is_test_or_migration(mod.name):
+                import_module(mod.name)
+    for cls in set(_all_subclasses(forms.ModelForm)):
+        mod = cls.__module__
+        if mod.split(".")[0] in _PACKAGES and not _is_test_or_migration(mod) and cls._meta.model:
+            yield cls
 
 
 def test_every_project_model_form_on_user_owned_data_is_tenant_scoped():
@@ -166,13 +178,16 @@ _BANNED = {
 
 
 def _violations(source: str) -> list[str]:
-    # Comments are stripped so prose about a banned pattern does not trip the test.
-    code = "\n".join(line.split("#", 1)[0] for line in source.splitlines())
+    # Comments are dropped (via tokenize, so a "#" inside a string does not hide the rest
+    # of the line) and prose about a banned pattern does not trip the test. Strings and
+    # docstrings are still scanned.
+    tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+    code = tokenize.untokenize(t for t in tokens if t.type != tokenize.COMMENT)
     return [name for name, rx in _BANNED.items() if rx.search(code)]
 
 
 def _app_files():
-    for app in ("journal", "accounts"):
+    for app in _PACKAGES:
         for path in (_ROOT / app).rglob("*.py"):
             rel = path.relative_to(_ROOT)
             if (
@@ -205,7 +220,24 @@ def test_app_code_uses_none_of_the_banned_unscoped_patterns():
         ("Foo.objects.bulk_create(rows)", ["bulk_create/bulk_update"]),
         ("get_object_or_404(Foo.objects.for_user(u), pk=1)", []),
         ("# Foo.unscoped and bulk_create are banned", []),
+        ('x = "/a#b"; Foo._default_manager', ["_default_manager"]),
     ],
 )
 def test_grep_scanner_flags_banned_patterns(snippet, expected):
     assert _violations(snippet) == expected
+
+
+def test_tripwire_finds_a_model_form_defined_outside_a_forms_module():
+    import gc
+
+    class Stray(forms.ModelForm):
+        class Meta:
+            model = RawImportRow
+            fields = ["import_batch"]
+
+    Stray.__module__ = "journal.views"  # as if a view module defined it
+    try:
+        assert Stray in _unscoped_forms(_project_model_forms())
+    finally:
+        del Stray
+        gc.collect()  # drop it from ModelForm.__subclasses__() for the real tripwire
