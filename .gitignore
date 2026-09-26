@@ -1,5 +1,6 @@
 all_trades_export.csv
 *.csv
+!tests/fixtures/*.csv
 .claude/worktrees/
 
 # Python / Django / uv
