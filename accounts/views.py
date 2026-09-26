@@ -1,8 +1,10 @@
+import logging
+
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
+from django.db import DatabaseError, IntegrityError
 from django.shortcuts import redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.debug import sensitive_post_parameters
@@ -10,6 +12,8 @@ from django.views.decorators.http import require_POST
 
 from accounts import copy
 from accounts.forms import TIMEZONE_NAMES, LoginForm, SignupForm
+
+log = logging.getLogger(__name__)
 
 
 def home(request):
@@ -28,6 +32,10 @@ def signup(request):
             # Duplicate email (any case), including a lost race on the DB constraint.
             # One generic form-level message, never attached to the Email field.
             form.add_error(None, copy.SIGNUP_EMAIL_UNUSABLE)
+        except DatabaseError as exc:
+            # Design 4.4 server failure. Log the class only: DB messages can echo parameters.
+            log.error("signup failed: %s", type(exc).__name__)
+            form.add_error(None, copy.SIGNUP_SERVER_FAILURE)
         else:
             login(request, user)
             messages.success(request, copy.SIGNUP_WELCOME)
@@ -55,12 +63,17 @@ def login_view(request):
     if request.method == "POST" and form.is_valid():
         # ModelBackend runs the hasher for unknown emails and rejects inactive users, so
         # unknown email, wrong password and inactive all land here with the same result.
-        user = authenticate(request, username=form.cleaned_data["email"], password=form.cleaned_data["password"])
-        if user is None:
-            form.add_error(None, copy.LOGIN_BAD_CREDENTIALS)
+        try:
+            user = authenticate(request, username=form.cleaned_data["email"], password=form.cleaned_data["password"])
+        except DatabaseError as exc:
+            log.error("login failed: %s", type(exc).__name__)  # class only, never the message
+            form.add_error(None, copy.LOGIN_SERVER_FAILURE)
         else:
-            login(request, user)
-            return redirect(next_url or settings.LOGIN_REDIRECT_URL)
+            if user is None:
+                form.add_error(None, copy.LOGIN_BAD_CREDENTIALS)
+            else:
+                login(request, user)
+                return redirect(next_url or settings.LOGIN_REDIRECT_URL)
     return render(
         request,
         "accounts/login.html",

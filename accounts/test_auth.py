@@ -312,3 +312,21 @@ def test_user_b_sees_none_of_user_a_through_the_views_added_here(client):
 def test_password_fields_are_marked_sensitive_for_error_reports(client, path, data, fields):
     resp = client.post(path, data)
     assert sorted(resp.wsgi_request.sensitive_post_parameters) == fields
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "path, target, data, message",
+    [
+        ("/signup/", "accounts.forms.SignupForm.save", signup_data(), copy.SIGNUP_SERVER_FAILURE),
+        ("/login/", "accounts.views.authenticate", {"email": "x@example.com", "password": GOOD_PW}, copy.LOGIN_SERVER_FAILURE),
+    ],
+)
+def test_database_failure_is_logged_without_the_password_and_shown_form_level(client, caplog, path, target, data, message):
+    from django.db import OperationalError
+
+    with patch(target, side_effect=OperationalError(f"db down {GOOD_PW}")):
+        resp = client.post(path, data)
+    assert resp.status_code == 200
+    assert list(resp.context["form"].non_field_errors()) == [message]
+    assert caplog.records and GOOD_PW not in caplog.text

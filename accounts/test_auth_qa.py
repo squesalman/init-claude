@@ -743,7 +743,6 @@ def test_another_users_id_in_the_session_cookie_cannot_be_forged(client, user):
 # the in-form message design 4.4 specifies ("Above the form: We couldn't ... Try again in a moment.").
 
 
-@pytest.mark.xfail(strict=True, reason="QA bug: design 4.4 signup server-failure message not implemented (views.py:24)")
 @pytest.mark.django_db
 def test_signup_database_failure_shows_the_design_server_failure_message(client):
     from django.db import OperationalError
@@ -754,7 +753,6 @@ def test_signup_database_failure_shows_the_design_server_failure_message(client)
     assert copy.SIGNUP_SERVER_FAILURE in html.unescape(resp.content.decode())
 
 
-@pytest.mark.xfail(strict=True, reason="QA bug: design 4.4 login server-failure message not implemented (views.py:55)")
 @pytest.mark.django_db
 def test_login_database_failure_shows_the_design_server_failure_message(client, user):
     from django.db import OperationalError
