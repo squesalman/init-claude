@@ -404,6 +404,7 @@ def test_bad_time_zone_error_keeps_the_typed_value_and_clears_passwords(client):
 UNSAFE_NEXT = [
     "https://evil.example/x",
     "http://evil.example",
+    "http://testserver.evil.example/",
     "//evil.example/x",
     "///evil.example",
     "/\\evil.example",
@@ -529,7 +530,11 @@ def test_wrong_password_unknown_email_and_inactive_render_the_same_page(user):
             sorted(resp.cookies),
         )
         assert "_auth_user_id" not in c.session
+        form = resp.context["form"]
+        assert form.non_field_errors() == [copy.LOGIN_BAD_CREDENTIALS], name
+        assert list(form.errors) == ["__all__"], name  # no field-level hint
     first = seen["wrong"]
+    assert first[0] == 200
     for name, got in seen.items():
         assert got == first, name
     assert copy.LOGIN_BAD_CREDENTIALS in html.unescape(first[1])
@@ -580,7 +585,10 @@ def test_logout_kills_the_server_side_session_so_a_stolen_cookie_cannot_be_repla
     client.force_login(user)
     old_key = client.cookies["sessionid"].value
     assert client.get("/trades/").status_code == 200
-    client.post("/logout/")
+    resp = client.post("/logout/")
+    assert resp.status_code == 302 and resp["Location"] == "/login/"
+    assert not logged_in(client, user)
+    assert [str(m) for m in resp.wsgi_request._messages] == [copy.LOGOUT_FLASH]
     replay = Client()
     replay.cookies["sessionid"] = old_key
     resp = replay.get("/trades/")
@@ -647,6 +655,7 @@ def test_trades_no_store_holds_for_the_page_and_the_login_redirect(client, user)
     assert redirect.status_code == 302
     client.force_login(user)
     page = client.get("/trades/")
+    assert page.status_code == 200
     for resp in (redirect, page):
         cc = resp["Cache-Control"]
         assert "no-store" in cc and "no-cache" in cc and "private" in cc, cc
@@ -720,12 +729,21 @@ def test_trades_shows_nothing_of_another_users_account_or_rows_and_never_mixes_s
         currency="USD", executed_at=timezone.now(), source=Execution.SOURCE_MANUAL,
     )
 
+    client_a = Client()
+    client_a.force_login(a)
     client.force_login(b)
     for path in ("/trades/", "/trades/?sort=symbol&dir=asc"):
-        body = client.get(path).content.decode()
+        resp = client.get(path)
+        assert resp.status_code == 200 and resp.wsgi_request.user == b
+        body = resp.content.decode()
         for leak in ("alice-secret", "ALICEONLY", "alice-private-file", "Asia/Tokyo"):
             assert leak not in body, (path, leak)
         assert "bob@example.com" in body
+        # nothing user-owned is passed to the template yet; PR D adds rows and must extend this
+        assert not any(key in resp.context for key in ("trades", "executions", "batches"))
+
+    # A's concurrent session is untouched by B's requests.
+    assert client_a.get("/trades/").wsgi_request.user == a
 
     # Same browser, user switch through logout: no residue of B in A's page, none of A in B's.
     client.post("/logout/")
@@ -754,20 +772,24 @@ def test_another_users_id_in_the_session_cookie_cannot_be_forged(client, user):
 
 
 @pytest.mark.django_db
-def test_signup_database_failure_shows_the_design_server_failure_message(client):
+def test_signup_database_failure_shows_the_design_server_failure_message(client, caplog):
     from django.db import OperationalError
 
-    with patch("accounts.forms.SignupForm.save", side_effect=OperationalError("db down")):
+    with patch("accounts.forms.SignupForm.save", side_effect=OperationalError(f"db down {GOOD_PW}")):
         resp = Client(raise_request_exception=False).post("/signup/", signup_data())
     assert resp.status_code == 200
+    assert resp.context["form"].non_field_errors() == [copy.SIGNUP_SERVER_FAILURE]
     assert copy.SIGNUP_SERVER_FAILURE in html.unescape(resp.content.decode())
+    assert caplog.records and GOOD_PW not in caplog.text  # logged, without the password
 
 
 @pytest.mark.django_db
-def test_login_database_failure_shows_the_design_server_failure_message(client, user):
+def test_login_database_failure_shows_the_design_server_failure_message(client, user, caplog):
     from django.db import OperationalError
 
-    with patch("accounts.views.authenticate", side_effect=OperationalError("db down")):
+    with patch("accounts.views.authenticate", side_effect=OperationalError(f"db down {GOOD_PW}")):
         resp = Client(raise_request_exception=False).post("/login/", {"email": user.email, "password": GOOD_PW})
     assert resp.status_code == 200
+    assert resp.context["form"].non_field_errors() == [copy.LOGIN_SERVER_FAILURE]
     assert copy.LOGIN_SERVER_FAILURE in html.unescape(resp.content.decode())
+    assert caplog.records and GOOD_PW not in caplog.text  # logged, without the password

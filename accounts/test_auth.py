@@ -1,14 +1,12 @@
 """
 Signup / login / logout behaviour (docs/product/features/import-and-list.md section 4, AC 1-8)
 with the exact copy from docs/design/auth-and-trades-list.md section 4 (held in accounts/copy.py).
-Includes the mandatory tenant-isolation check for the views added here (ADR-0002).
+The mandatory tenant-isolation check (ADR-0002), the race, unsafe-next, bad-credential, logout,
+no-store and DB-failure cases live in accounts/test_auth_qa.py.
 """
-
-from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.db import IntegrityError
 
 from accounts import copy
 
@@ -77,15 +75,6 @@ def test_signup_duplicate_email_any_case_shows_one_generic_form_level_message(cl
     assert not form.errors.get("email")  # not attached to the Email field
     assert form["email"].value() == variant  # email value is kept
     assert not logged_in(client, User.objects.get())
-
-
-@pytest.mark.django_db
-def test_signup_duplicate_email_race_is_the_same_generic_message(client):
-    """Two signups pass the form checks; the DB constraint loses the second one."""
-    with patch.object(User.objects, "create_user", side_effect=IntegrityError):
-        resp = client.post("/signup/", signup_data())
-    assert resp.status_code == 200
-    assert resp.context["form"].non_field_errors() == [copy.SIGNUP_EMAIL_UNUSABLE]
 
 
 @pytest.mark.django_db
@@ -176,37 +165,6 @@ def test_login_follows_a_safe_next_from_query_or_post_body(client, user):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    "next_url",
-    ["https://evil.example/x", "//evil.example/x", "http://testserver.evil.example/", "javascript:alert(1)"],
-)
-def test_login_ignores_unsafe_next(client, user, next_url):
-    resp = client.post("/login/", {"email": user.email, "password": GOOD_PW, "next": next_url})
-    assert resp["Location"] == "/trades/"
-    client.post("/logout/")
-    resp = client.post("/login/", {"email": user.email, "password": GOOD_PW}, QUERY_STRING=f"next={next_url}")
-    assert resp["Location"] == "/trades/"
-
-
-@pytest.mark.django_db
-def test_login_bad_credentials_are_identical_for_unknown_email_wrong_password_and_inactive(client, user):
-    inactive = User.objects.create_user(email="off@example.com", password=GOOD_PW, is_active=False)
-
-    def attempt(email, password):
-        resp = client.post("/login/", {"email": email, "password": password})
-        return resp.status_code, resp.context["form"].errors.as_data(), resp.context["form"].non_field_errors()
-
-    unknown = attempt("nobody@example.com", GOOD_PW)
-    wrong = attempt(user.email, "wrong-password-1")
-    off = attempt(inactive.email, GOOD_PW)
-
-    assert unknown[0] == wrong[0] == off[0] == 200
-    assert unknown[2] == wrong[2] == off[2] == [copy.LOGIN_BAD_CREDENTIALS]
-    assert list(unknown[1]) == list(wrong[1]) == list(off[1]) == ["__all__"]  # no field-level hint
-    assert "_auth_user_id" not in client.session
-
-
-@pytest.mark.django_db
 def test_login_missing_fields_use_design_copy(client):
     resp = client.post("/login/", {"email": "", "password": ""})
     errors = resp.context["form"].errors
@@ -230,20 +188,7 @@ def test_logged_in_user_is_redirected_away_from_login_and_signup(client, user, p
     assert resp.status_code == 302 and resp["Location"] == "/trades/"
 
 
-# --- logout, root, protected pages -------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_logout_is_post_only(client, user):
-    client.force_login(user)
-
-    assert client.get("/logout/").status_code == 405
-    assert logged_in(client, user)
-
-    resp = client.post("/logout/")
-    assert resp.status_code == 302 and resp["Location"] == "/login/"
-    assert not logged_in(client, user)
-    assert [str(m) for m in resp.wsgi_request._messages] == [copy.LOGOUT_FLASH]
+# --- root, protected pages ---------------------------------------------------------------
 
 
 @pytest.mark.django_db
@@ -257,45 +202,6 @@ def test_root_redirects_by_auth_state(client, user):
 def test_anonymous_trades_redirects_to_login_keeping_next(client):
     resp = client.get("/trades/")
     assert resp.status_code == 302 and resp["Location"] == "/login/?next=/trades/"
-
-
-@pytest.mark.django_db
-def test_trades_page_is_not_cached(client, user):
-    client.force_login(user)
-    resp = client.get("/trades/")
-    assert resp.status_code == 200
-    assert "no-store" in resp["Cache-Control"]
-
-
-# --- tenant isolation (ADR-0002, mandatory) ----------------------------------------------
-
-
-@pytest.mark.django_db
-def test_user_b_sees_none_of_user_a_through_the_views_added_here(client):
-    from django.test import Client
-
-    from journal.tests import _make_execution, _make_import_batch
-
-    a = User.objects.create_user(email="alice-private@example.com", password=GOOD_PW, timezone="Asia/Tokyo")
-    b = User.objects.create_user(email="bob@example.com", password=GOOD_PW)
-    _make_import_batch(a)
-    _make_execution(a)
-
-    client_a = Client()
-    client_a.force_login(a)
-    client.force_login(b)
-
-    resp = client.get("/trades/")
-    assert resp.status_code == 200
-    assert resp.wsgi_request.user == b
-    assert b"alice-private@example.com" not in resp.content
-    assert b"bob@example.com" in resp.content
-    # nothing user-owned is passed to the template yet; PR D adds rows and must extend this
-    assert not any(key in resp.context for key in ("trades", "executions", "batches"))
-
-    # A's session is untouched by B's requests, and B's cookie never authenticates as A.
-    assert client_a.get("/trades/").wsgi_request.user == a
-    assert Client().get("/trades/").status_code == 302
 
 
 # --- error-report hygiene (security review M1) --------------------------------------------
@@ -312,24 +218,6 @@ def test_user_b_sees_none_of_user_a_through_the_views_added_here(client):
 def test_password_fields_are_marked_sensitive_for_error_reports(client, path, data, fields):
     resp = client.post(path, data)
     assert sorted(resp.wsgi_request.sensitive_post_parameters) == fields
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize(
-    "path, target, data, message",
-    [
-        ("/signup/", "accounts.forms.SignupForm.save", signup_data(), copy.SIGNUP_SERVER_FAILURE),
-        ("/login/", "accounts.views.authenticate", {"email": "x@example.com", "password": GOOD_PW}, copy.LOGIN_SERVER_FAILURE),
-    ],
-)
-def test_database_failure_is_logged_without_the_password_and_shown_form_level(client, caplog, path, target, data, message):
-    from django.db import OperationalError
-
-    with patch(target, side_effect=OperationalError(f"db down {GOOD_PW}")):
-        resp = client.post(path, data)
-    assert resp.status_code == 200
-    assert list(resp.context["form"].non_field_errors()) == [message]
-    assert caplog.records and GOOD_PW not in caplog.text
 
 
 # --- template copy comes from copy.py via the view context (follow-ups row 21) ------------
