@@ -1,4 +1,5 @@
 from django import forms
+from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 
 from journal.models import UserOwned
@@ -8,8 +9,9 @@ class UserScopedModelForm(forms.ModelForm):
     """
     Base for every ModelForm on a UserOwned model (ADR-0006 Decision 2). Build it as
     `Form(..., user=request.user)`. `user` must never be in Meta.fields: it is set here.
-    Every FK dropdown is narrowed with for_user(), so another tenant's id is an ordinary
-    "invalid choice" instead of a cross-tenant write.
+    Every FK dropdown is narrowed with for_user(), and any User dropdown to the current
+    user, so another tenant's id is an ordinary "invalid choice" instead of a cross-tenant
+    write.
     """
 
     def __init__(self, *args, user, **kwargs):
@@ -22,3 +24,5 @@ class UserScopedModelForm(forms.ModelForm):
             qs = getattr(field, "queryset", None)
             if qs is not None and issubclass(qs.model, UserOwned):
                 field.queryset = qs.model.objects.for_user(user)
+            elif qs is not None and issubclass(qs.model, get_user_model()):
+                field.queryset = qs.filter(pk=user.pk)

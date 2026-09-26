@@ -241,3 +241,13 @@ def test_tripwire_finds_a_model_form_defined_outside_a_forms_module():
     finally:
         del Stray
         gc.collect()  # drop it from ModelForm.__subclasses__() for the real tripwire
+
+
+def test_user_scoped_form_narrows_a_user_choice_field_to_the_current_user(two_users):
+    a, b = two_users
+
+    class WithUserChoice(_RowForm):
+        reviewer = forms.ModelChoiceField(queryset=get_user_model().objects.all())
+
+    form = WithUserChoice(user=a)
+    assert list(form.fields["reviewer"].queryset) == [a]
