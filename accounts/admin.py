@@ -1,5 +1,3 @@
-from django.contrib import admin
-
 # Register your models here.
 #
 # Warning (round-5 code review, nothing registered yet, nothing to fix — just flagging

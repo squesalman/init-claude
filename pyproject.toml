@@ -39,6 +39,11 @@ select = ["E", "F", "I", "B", "UP", "DJ", "S"]
 "test_*.py" = ["S"]
 "tests.py" = ["S"]
 "**/test_*.py" = ["S"]
+# S105 false positive: user-facing error copy whose constant names contain "PASSWORD".
+"accounts/copy.py" = ["S105"]
+# Pre-existing QA/page tests with long assertion messages and test names; not rewrapped.
+"accounts/test_auth_qa.py" = ["E501"]
+"config/test_pages.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["accounts", "journal", "config"]

@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 from django import forms
-from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 

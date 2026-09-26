@@ -19,7 +19,10 @@ class SignupForm(forms.Form):
     email = forms.EmailField(
         label="Email",
         max_length=254,
-        error_messages={"required": copy.SIGNUP_EMAIL_MISSING, "invalid": copy.SIGNUP_EMAIL_MALFORMED},
+        error_messages={
+            "required": copy.SIGNUP_EMAIL_MISSING,
+            "invalid": copy.SIGNUP_EMAIL_MALFORMED,
+        },
         widget=forms.EmailInput(
             attrs={"autocomplete": "email", "autocapitalize": "none", "spellcheck": "false"}
         ),
@@ -64,7 +67,9 @@ class SignupForm(forms.Form):
                 validate_password(password1, user=User(email=cleaned.get("email", "")))
             except ValidationError as exc:
                 for err in exc.error_list:
-                    self.add_error("password1", copy.PASSWORD_VALIDATOR_COPY.get(err.code, err.message))
+                    self.add_error(
+                        "password1", copy.PASSWORD_VALIDATOR_COPY.get(err.code, err.message)
+                    )
         return cleaned
 
     def save(self):

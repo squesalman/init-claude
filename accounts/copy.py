@@ -24,7 +24,9 @@ SIGNUP_EMAIL_UNUSABLE = (
 )
 SIGNUP_ERROR_SUMMARY_TITLE = "Please fix the items below."
 SIGNUP_SERVER_FAILURE = "We couldn't finish creating your account. Try again in a moment."
-SIGNUP_TIMEZONE_HELP = "Used to show your trade times. Type your time zone, for example America/New_York."
+SIGNUP_TIMEZONE_HELP = (
+    "Used to show your trade times. Type your time zone, for example America/New_York."
+)
 SIGNUP_TIMEZONE_HELP_DETECTED = "Used to show your trade times. We detected this from your browser."
 SIGNUP_BUSY = "Creating..."
 

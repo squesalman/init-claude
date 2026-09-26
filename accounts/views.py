@@ -71,7 +71,11 @@ def login_view(request):
         # ModelBackend runs the hasher for unknown emails and rejects inactive users, so
         # unknown email, wrong password and inactive all land here with the same result.
         try:
-            user = authenticate(request, username=form.cleaned_data["email"], password=form.cleaned_data["password"])
+            user = authenticate(
+                request,
+                username=form.cleaned_data["email"],
+                password=form.cleaned_data["password"],
+            )
         except DatabaseError as exc:
             log.error("login failed: %s", type(exc).__name__)  # class only, never the message
             form.add_error(None, copy.LOGIN_SERVER_FAILURE)
