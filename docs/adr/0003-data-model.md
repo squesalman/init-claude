@@ -1,6 +1,6 @@
 # ADR-0003: Core data model (executions, derived trades, journal)
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR-0004](0004-topstep-dedupe-and-pairing.md) (dedupe key, `broker_trade_id`, `skipped_conflict`, matcher grouping)
 - **Date:** 2026-09-22
 - **Deciders:** architect (proposed), user (to approve)
 - **Depends on:** [ADR-0002](0002-stack-revised.md) (Django + Postgres, `NUMERIC` money, compute-on-read,
@@ -95,7 +95,7 @@ to secure or scope per user.
 | `import_batch_id` | `BIGINT NOT NULL REFERENCES journal_importbatch ON DELETE CASCADE` | |
 | `line_number` | `INTEGER NOT NULL` | 1-based, as in the file |
 | `raw` | `JSONB NOT NULL` | the CSV row as `{header: cell}`, strings only, **no coercion** |
-| `status` | `VARCHAR(20) NOT NULL` | `imported` / `skipped_duplicate` / `failed` |
+| `status` | `VARCHAR(20) NOT NULL` | `imported` / `skipped_duplicate` / `failed` (+ `skipped_conflict`, ADR-0004) |
 | `error` | `TEXT NOT NULL DEFAULT ''` | why it failed, shown to the user (story 3: never silently dropped) |
 
 `UNIQUE (import_batch_id, line_number)`.
@@ -128,7 +128,7 @@ recreates its executions; imported executions are never edited (re-import instea
 | `raw_import_row_id` | `BIGINT NULL REFERENCES journal_rawimportrow ON DELETE SET NULL` | provenance; `NULL` for manual |
 | `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | |
 
-**Idempotent import is this one index:**
+**Idempotent import is this one index** (superseded: ADR-0004 adds `broker_account_label` to the key):
 
 ```sql
 CREATE UNIQUE INDEX execution_broker_dedupe
@@ -249,7 +249,7 @@ added, and a model that skips the base fails the test by omission.
 
 | Table | Index | For |
 |---|---|---|
-| `execution` | `UNIQUE (user_id, broker, broker_execution_id) WHERE broker_execution_id IS NOT NULL` | idempotent import |
+| `execution` | `UNIQUE (user_id, broker, broker_account_label, broker_execution_id) WHERE broker_execution_id IS NOT NULL AND <> ''` (ADR-0004) | idempotent import |
 | `execution` | `(user_id, symbol, executed_at)` | the matcher's read pattern |
 | `execution` | `(user_id, executed_at DESC)` | date-bounded loads, recency |
 | `rawimportrow` | `UNIQUE (import_batch_id, line_number)` | re-parse, error display |
@@ -353,7 +353,7 @@ the database enforcing it.
 - **No `account` dimension.** A Topstep user trading two funded accounts sees them merged in one
   trade list, and — worse — the matcher may pair a fill from one account against another. If the
   export carries an account column, revisit before release: matching must group by
-  `(symbol, broker_account_label)`, which is a matcher change, not a schema change.
+  `(symbol, broker_account_label)`, which is a matcher change, not a schema change. **Resolved by ADR-0004.**
 - **Two R-multiple columns where the spec will want one.** Costs a one-line migration to clean up.
 
 ## Assumptions made ahead of `docs/domain/`
@@ -376,7 +376,7 @@ change at worst, not a redesign.
 5. **R-multiple inputs are `stop_price` and/or `planned_risk_amount` on the journal entry**
    (open question 1), both optional; trades without them are excluded from the average and reflected
    in its sample size, per `mvp.md`.
-6. **`broker_account_label` exists in the export.** Stored verbatim, unused by MVP. Empty string if
+6. **`broker_account_label` exists in the export.** (Wrong for Topstep: no account column; see ADR-0004 open question 1.) Stored verbatim, unused by MVP. Empty string if
    the export has no such column.
 7. **Win-rate tie-breaking (open question 3) needs no schema support** — it is a predicate over
    derived `net_pnl`. Confirmed safe to leave to `docs/domain/`.
