@@ -5,8 +5,8 @@
 {# Placeholder: design 5.4 state A only. PR D adds state B, the table and the stat cards. #}
 {# /imports/ is a plain href: the route does not exist yet. #}
 <section aria-labelledby="empty-title" class="mt-6 rounded-lg border border-border bg-surface p-6 sm:p-8">
-  <h2 id="empty-title" class="text-lg font-semibold">No trades yet</h2>
-  <p class="mt-2 text-text-muted">Upload your TopstepX 'Trades' export and your trades show up here.</p>
-  <a href="/imports/" class="btn-primary mt-6 w-full sm:w-auto">Import trades</a>
+  <h2 id="empty-title" class="text-lg font-semibold">{{ empty_heading }}</h2>
+  <p class="mt-2 text-text-muted">{{ empty_body }}</p>
+  <a href="/imports/" class="btn-primary mt-6 w-full sm:w-auto">{{ empty_action }}</a>
 </section>
 {% endblock %}

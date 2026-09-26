@@ -12,17 +12,17 @@
     {% include "partials/field.html" with field=form.email %}
     {% include "partials/field.html" with field=form.password1 %}
     {% include "partials/field.html" with field=form.password2 %}
-    {# Written out: the help text is template copy and data-detect marks a fresh form for the prefill script. #}
+    {# Written out: two help texts (no-JS text, JS text in data-detected) and data-detect marks a fresh form for the prefill script. #}
     {% with field=form.timezone %}
     <div class="field">
       <label for="{{ field.id_for_label }}" class="font-medium">{{ field.label }}</label>
       <input type="text" name="{{ field.html_name }}" id="{{ field.auto_id }}" value="{{ field.value|default_if_none:'' }}" list="timezones" maxlength="64" required autocapitalize="none" spellcheck="false" aria-describedby="{{ field.auto_id }}_helptext{% if field.errors %} {{ field.auto_id }}_error{% endif %}"{% if field.errors %} aria-invalid="true"{% endif %}{% if not form.is_bound %} data-detect{% endif %}>
       <datalist id="timezones">{% for tz in timezones %}<option value="{{ tz }}">{% endfor %}</datalist>
       {% include "partials/field_errors.html" %}
-      <p id="{{ field.auto_id }}_helptext" class="mt-1 text-text-muted">Used to show your trade times. Type your time zone, for example America/New_York.</p>
+      <p id="{{ field.auto_id }}_helptext" class="mt-1 text-text-muted" data-detected="{{ timezone_help_detected }}">{{ timezone_help }}</p>
     </div>
     {% endwith %}
-    <button type="submit" class="btn-primary w-full" data-busy="Creating...">Create account</button>
+    <button type="submit" class="btn-primary w-full" data-busy="{{ busy_label }}">Create account</button>
   </form>
   <p class="mt-6">Already have an account? <a href="{% url 'login' %}">Log in</a></p>
 </div>
@@ -36,8 +36,8 @@
   if (!input.hasAttribute("data-detect") || !zone) return;
   if (!document.querySelector('#timezones option[value="' + CSS.escape(zone) + '"]')) return;
   input.value = zone;
-  document.getElementById("id_timezone_helptext").textContent =
-    "Used to show your trade times. We detected this from your browser.";
+  const help = document.getElementById("id_timezone_helptext");
+  help.textContent = help.dataset.detected;
 })();
 </script>
 {% endblock %}

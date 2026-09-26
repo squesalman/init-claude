@@ -1,6 +1,6 @@
 """
 User-facing auth strings, exact per docs/design/auth-and-trades-list.md section 4.1 / 4.2 /
-4.4. The design doc owns the wording; change it there first. Templates use these via the
+4.4 / 5.4. The design doc owns the wording; change it there first. Templates use these via the
 form/view context so the frontend never retypes them.
 """
 
@@ -24,6 +24,9 @@ SIGNUP_EMAIL_UNUSABLE = (
 )
 SIGNUP_ERROR_SUMMARY_TITLE = "Please fix the items below."
 SIGNUP_SERVER_FAILURE = "We couldn't finish creating your account. Try again in a moment."
+SIGNUP_TIMEZONE_HELP = "Used to show your trade times. Type your time zone, for example America/New_York."
+SIGNUP_TIMEZONE_HELP_DETECTED = "Used to show your trade times. We detected this from your browser."
+SIGNUP_BUSY = "Creating..."
 
 # Django password-validator error code -> design string (4.1)
 PASSWORD_VALIDATOR_COPY = {
@@ -39,4 +42,10 @@ LOGIN_EMAIL_MISSING = "Enter your email address."
 LOGIN_PASSWORD_MISSING = "Enter your password."
 LOGIN_BAD_CREDENTIALS = "That email and password don't match. Check them and try again."
 LOGIN_SERVER_FAILURE = "We couldn't log you in just now. Try again in a moment."
+LOGIN_BUSY = "Logging in..."
 LOGOUT_FLASH = "You're logged out."
+
+# /trades/ empty state A (5.4)
+TRADES_EMPTY_HEADING = "No trades yet"
+TRADES_EMPTY_BODY = "Upload your TopstepX 'Trades' export and your trades show up here."
+TRADES_EMPTY_ACTION = "Import trades"

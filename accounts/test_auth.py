@@ -330,3 +330,28 @@ def test_database_failure_is_logged_without_the_password_and_shown_form_level(cl
     assert resp.status_code == 200
     assert list(resp.context["form"].non_field_errors()) == [message]
     assert caplog.records and GOOD_PW not in caplog.text
+
+
+# --- template copy comes from copy.py via the view context (follow-ups row 21) ------------
+
+
+@pytest.mark.django_db
+def test_signup_login_and_trades_copy_is_passed_from_copy_py(client, user):
+    ctx = client.get("/signup/").context
+    assert ctx["timezone_help"] == copy.SIGNUP_TIMEZONE_HELP
+    assert ctx["timezone_help_detected"] == copy.SIGNUP_TIMEZONE_HELP_DETECTED
+    assert ctx["busy_label"] == copy.SIGNUP_BUSY
+    assert client.get("/login/").context["busy_label"] == copy.LOGIN_BUSY
+
+    client.force_login(user)
+    ctx = client.get("/trades/").context
+    assert (ctx["empty_heading"], ctx["empty_body"], ctx["empty_action"]) == (
+        copy.TRADES_EMPTY_HEADING, copy.TRADES_EMPTY_BODY, copy.TRADES_EMPTY_ACTION
+    )
+
+
+@pytest.mark.django_db
+def test_signup_detected_zone_help_reaches_the_script_through_a_data_attribute(client):
+    body = client.get("/signup/").content.decode()
+    assert body.count("We detected this from your browser") == 1  # not retyped in the JS
+    assert f'data-detected="{copy.SIGNUP_TIMEZONE_HELP_DETECTED}"' in body

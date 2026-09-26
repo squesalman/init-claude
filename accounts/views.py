@@ -43,7 +43,14 @@ def signup(request):
     return render(
         request,
         "accounts/signup.html",
-        {"form": form, "timezones": TIMEZONE_NAMES, "error_summary_title": copy.SIGNUP_ERROR_SUMMARY_TITLE},
+        {
+            "form": form,
+            "timezones": TIMEZONE_NAMES,
+            "error_summary_title": copy.SIGNUP_ERROR_SUMMARY_TITLE,
+            "timezone_help": copy.SIGNUP_TIMEZONE_HELP,
+            "timezone_help_detected": copy.SIGNUP_TIMEZONE_HELP_DETECTED,
+            "busy_label": copy.SIGNUP_BUSY,
+        },
     )
 
 
@@ -83,6 +90,7 @@ def login_view(request):
             "login_required_notice": copy.LOGIN_REQUIRED if next_url else None,
             # Design 4.3: both forms use the one summary title (held under SIGNUP_ in copy.py).
             "error_summary_title": copy.SIGNUP_ERROR_SUMMARY_TITLE,
+            "busy_label": copy.LOGIN_BUSY,
         },
     )
 

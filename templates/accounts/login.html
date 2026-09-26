@@ -18,7 +18,7 @@
     </div>
     {% endwith %}
     {% include "partials/field.html" with field=form.password %}
-    <button type="submit" class="btn-primary w-full" data-busy="Logging in...">Log in</button>
+    <button type="submit" class="btn-primary w-full" data-busy="{{ busy_label }}">Log in</button>
   </form>
   <p class="mt-6">New here? <a href="{% url 'signup' %}">Create an account</a></p>
 </div>
