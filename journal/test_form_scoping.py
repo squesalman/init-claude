@@ -251,3 +251,17 @@ def test_user_scoped_form_narrows_a_user_choice_field_to_the_current_user(two_us
 
     form = WithUserChoice(user=a)
     assert list(form.fields["reviewer"].queryset) == [a]
+
+
+def test_user_scoped_form_keeps_a_pre_narrowed_queryset(two_users):
+    a, b = two_users
+    shown, hidden, theirs = _batch(a), _batch(a), _batch(b)
+
+    class Narrowed(_RowForm):
+        import_batch = forms.ModelChoiceField(
+            queryset=ImportBatch.unscoped.exclude(pk=hidden.pk)
+        )
+
+    # Neither the narrowed-out own row nor the other tenant's row is offered.
+    assert list(Narrowed(user=a).fields["import_batch"].queryset) == [shown]
+    assert theirs.user == b
