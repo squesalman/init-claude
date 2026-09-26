@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Trading Journal{% endblock %}</title>
+</head>
+<body>
+{# PLAIN placeholder: frontend-engineer replaces per docs/design/auth-and-trades-list.md #}
+<nav>
+  <a href="/">Trading Journal</a>
+  {% if user.is_authenticated %}
+    <a href="/trades/">Trades</a>
+    {{ user.email }}
+    <form method="post" action="/logout/" style="display:inline">{% csrf_token %}<button type="submit">Log out</button></form>
+  {% else %}
+    <a href="/login/">Log in</a> <a href="/signup/">Sign up</a>
+  {% endif %}
+</nav>
+{% for message in messages %}<p role="status">{{ message }}</p>{% endfor %}
+<main id="main">
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Log in{% endblock %}
+{% block content %}
+{% if login_required_notice %}<p role="status">{{ login_required_notice }}</p>{% endif %}
+<h1>Log in</h1>
+<form method="post">
+  {% csrf_token %}
+  {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+  {{ form.as_p }}
+  <button type="submit">Log in</button>
+</form>
+<p>New here? <a href="/signup/">Create an account</a></p>
+{% endblock %}

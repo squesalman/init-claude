@@ -75,6 +75,9 @@ ALLOWED_HOSTS = [
 ]
 
 AUTH_USER_MODEL = 'accounts.User'
+LOGIN_URL = '/login/'
+LOGIN_REDIRECT_URL = '/trades/'
+LOGOUT_REDIRECT_URL = '/login/'
 
 # auth.E003 is a false positive here: it only recognizes unique=True or a plain-field
 # UniqueConstraint on USERNAME_FIELD, not accounts.User's expression-based
@@ -119,7 +122,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
