@@ -1,4 +1,6 @@
-# Follow-ups from PR #1 code review (rounds 9–11)
+# Follow-ups (deferred work, each with a trigger)
+
+Started from the PR #1 code review (rounds 9–11); now the project's single tracker for deferred work. Add rows here, not in chat.
 
 Deferred on purpose. Each has a trigger: do it when that happens, not before.
 
@@ -19,6 +21,7 @@ Deferred on purpose. Each has a trigger: do it when that happens, not before.
 | 13 | **DECIDED — [ADR-0005](../adr/0005-batch-delete.md)** (Accepted, option (a): counted-checkbox delete of journaled entries). No schema change. Build: backend-engineer from ADR-0005 (7 tests first), ux-designer fills `[TBD-0005]`. | Before/with the import UI | backend-engineer, ux-designer | `journal/models.py` on_delete rules unchanged |
 | 14 | **No `CHECK planned_risk_amount > 0`** on `JournalEntry`. `pnl-and-matching.md` §3 requires it at form validation and as a computation guard (R is null with reason `planned_risk_not_positive` otherwise). A DB CHECK would make it a hard guarantee. | Next migration on `JournalEntry`, or before journaling forms ship | database-engineer | `journal/models.py` JournalEntry |
 | 15 | **Contract multipliers verified only for `CL` (1000) and `MCL` (100).** `ES`, `MES`, `NQ`, `MNQ`, `GC` are unverified; the importer rejects unknown roots rather than defaulting to 1. | A user imports a non-CL/MCL export | trading-domain-expert | `docs/domain/topstep-import.md` §2, §7 |
+| 16 | **Check whether TopstepX can export stop/bracket orders** (or stop price per trade). The closed-trade CSV has no stop or risk data, so `stop_price` and `planned_risk_amount` are typed by hand. A second export with stop orders would let a future importer fill them from real data. Findings go in `docs/domain/topstep-import.md`. Do not derive risk from average loss or price movement (circular, invents a stop). | User checks their TopstepX account; do before the journaling form is built | **user** (then trading-domain-expert) | `docs/domain/topstep-import.md`, `JournalEntry` R fields |
 
 ## Row 6 migration spec (ADR-0004)
 

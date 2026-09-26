@@ -206,6 +206,8 @@ All arithmetic is `Decimal`. Never float.
    R on this trade."
 4. **Else** (neither set) -> `R = null`, reason `no_risk_input`.
 
+**User ruling 2026-09-26: precedence and no-fallback confirmed ("KEEP").**
+
 The precedence and the multi-leg rule are named definitions (`R_RISK_PRECEDENCE =
 planned_over_stop`), not hidden defaults, so a per-user preference later is a config change.
 

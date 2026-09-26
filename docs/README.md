@@ -23,7 +23,7 @@ Statuses: **Accepted** (build from it) · **Draft** (don't build from it yet) ·
 ## Domain (`docs/domain/`, owner: `trading-domain-expert`)
 | Doc | Status | Answers |
 |---|---|---|
-| [pnl-and-matching](domain/pnl-and-matching.md) | Accepted (§3 precedence rule awaiting product confirmation, see below) | Fill→trade matching, P&L, win rate, R-multiple, test vectors. |
+| [pnl-and-matching](domain/pnl-and-matching.md) | Accepted | Fill→trade matching, P&L, win rate, R-multiple, test vectors. |
 | [topstep-import](domain/topstep-import.md) | Accepted | Real TopstepX CSV format, column mapping, multipliers, fees, dedupe, test vectors. |
 
 ## Design (`docs/design/`, owner: `ux-designer`)
@@ -37,10 +37,13 @@ Not designed yet: signup/login, trades list, stat cards.
 | Doc | Status | Answers |
 |---|---|---|
 | [schema](data/schema.md) | Living | Data dictionary for the merged schema. Must match `journal/models.py`. |
-| [follow-ups](data/follow-ups.md) | Living | Deferred work with triggers (rows 1-15). Owner of the file: orchestrator. |
+| [follow-ups](data/follow-ups.md) | Living | Deferred work with triggers (rows 1-16). Owner of the file: orchestrator. |
 
 ## Known conflicts
 None.
 
 ## Open decisions (not conflicts)
-- **R-multiple precedence** (`pnl-and-matching.md` §3): when both `planned_risk_amount` and `stop_price` are set, `planned_risk_amount` wins, with no fallback to the stop if the planned risk is unusable. This is a domain-expert call; `product-manager` or the user should confirm.
+None.
+
+## Recent rulings
+- 2026-09-26: R-multiple precedence kept as written in `pnl-and-matching.md` §3 (`planned_risk_amount` wins over `stop_price`; no fallback when planned risk is unusable). User ruling: "KEEP".
