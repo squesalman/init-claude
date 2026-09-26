@@ -1,8 +1,8 @@
 # ADR-0005: "Delete this import" (batch delete) semantics
 
-- **Status:** Proposed (one user ruling needed: §2, journaled trades)
+- **Status:** Accepted (user ruling 2026-09-26: option (a), delete journaled entries behind a counted tick box)
 - **Date:** 2026-09-26
-- **Deciders:** architect (proposed), user (to approve)
+- **Deciders:** architect (proposed), user (approved 2026-09-26: "a, yes, yes, yes")
 - **Depends on:** [ADR-0003](0003-data-model.md) (on_delete rules, `for_user()`), [ADR-0004](0004-topstep-dedupe-and-pairing.md)
   (recovery path for the wrong-label upload), [`import-account-label.md`](../product/features/import-account-label.md)
   (banner + AC 11), [`mvp.md`](../product/features/mvp.md) story 3

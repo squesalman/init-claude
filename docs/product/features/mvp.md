@@ -97,7 +97,10 @@ trades appear without manual re-entry.
   uploaded under the wrong Account label. Added after ADR-0004: its recovery path for the
   duplicate-batch risk depends on this. Semantics for executions that already have a
   journal entry are an open architect decision (see `docs/data/follow-ups.md` row 13).
-  Spec: `docs/product/features/import-account-label.md`.
+  Spec: `docs/product/features/import-account-label.md`. Semantics: ADR-0005 (Accepted).
+- Minimal `/imports/` list (recent imports, each row with a delete action in its menu) and
+  `/imports/<id>/` detail page exist so the "uploaded before" link and delete have a
+  target. Added 2026-09-26 by user ruling; wireframes in `docs/design/import-account-label.md`.
 
 **Out of scope:** any broker other than Topstep; scheduled/automatic re-import; email or
 API-based import.
