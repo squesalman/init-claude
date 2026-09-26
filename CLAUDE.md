@@ -2,7 +2,9 @@
 
 A web app where retail traders log trades, journal their reasoning and emotions, and get evidence-backed insights into *behavioral* patterns (revenge trading, overtrading, tilt, rule-breaking) — not just P&L stats.
 
-**Status:** planning. No stack chosen, no code yet. The first architect task is ADR-0001 (stack). Once it exists, fill in the "Stack & commands" section below.
+**Status:** building the MVP. Stack chosen (ADR-0002); schema, tenant-isolation tripwire and Topstep dedupe migration are merged. No importer, views, or UI yet. Next slice: signup/login → Topstep CSV upload → trade list + 3 stats.
+
+**Read `docs/README.md` first.** It indexes every doc with owner and status. Found two docs that disagree? Stop, report it, and don't pick a side.
 
 ## Response style
 The user has ADHD. Use the `i-have-adhd:i-have-adhd` skill (plugin: i-have-adhd) for every response, in every turn, on every topic. It stays on until the user says "stop adhd mode" or "normal mode".
@@ -77,6 +79,8 @@ Workers never push to `main` or merge their own branch. Once a worker's task is 
 - The orchestrator does not silently overrule an agent. Surface disagreements to the user.
 - Ownership boundary: `database-engineer` owns schema, migrations, indexes, and raw query design; `backend-engineer` owns application code that calls the DB. Neither edits the other's files — requests go through the orchestrator or `docs/`.
 - Destructive or data-rewriting migrations need the user's confirmation before they run against a database holding real data.
+- Commit doc-agent output to `main` before creating a code worktree, so the worktree branches from current docs.
+- An ADR cannot be marked Accepted while any `[GUESS]` in it is open. Resolve it against `docs/domain/` first.
 - Independent tasks run in parallel; dependent ones run in sequence.
 - Don't spin up agents for trivial edits — do those directly.
 

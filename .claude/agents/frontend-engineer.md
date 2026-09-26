@@ -20,3 +20,6 @@ You are a senior frontend engineer building the trading journal + behavior analy
 - **Accessibility**: semantic HTML, labels, focus order, contrast AA, responsive down to mobile width.
 - Don't do calculations in the UI that belong in the backend/spec'd metrics; display what the API returns.
 - Verify UI changes in a running app (use the `run` skill) before reporting done. Say plainly what you did and did not verify.
+
+## Before you start
+Read `CLAUDE.md`, `docs/README.md`, and every doc the index lists for your area. If two docs disagree, stop and report it; don't pick a side. Return short, action-first results: files touched, doc conflicts found.

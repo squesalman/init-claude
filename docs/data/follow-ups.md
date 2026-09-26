@@ -17,6 +17,8 @@ Deferred on purpose. Each has a trigger: do it when that happens, not before.
 | 11 | **Redundant CHECKs**: `execution_currency_not_blank` and the `~Q(risk_currency='')` term are covered by the currency regex CHECK. | Next migration on these tables | database-engineer | `journal/models.py` |
 | 12 | **`available_timezones()` walks the tz db at import** (every `manage.py`, pytest, worker start). Validate with `ZoneInfo(value)` in try/except, or cache lazily. | Startup time annoys | backend-engineer | `accounts/models.py` |
 | 13 | **DECIDED — [ADR-0005](../adr/0005-batch-delete.md)** (Accepted, option (a): counted-checkbox delete of journaled entries). No schema change. Build: backend-engineer from ADR-0005 (7 tests first), ux-designer fills `[TBD-0005]`. | Before/with the import UI | backend-engineer, ux-designer | `journal/models.py` on_delete rules unchanged |
+| 14 | **No `CHECK planned_risk_amount > 0`** on `JournalEntry`. `pnl-and-matching.md` §3 requires it at form validation and as a computation guard (R is null with reason `planned_risk_not_positive` otherwise). A DB CHECK would make it a hard guarantee. | Next migration on `JournalEntry`, or before journaling forms ship | database-engineer | `journal/models.py` JournalEntry |
+| 15 | **Contract multipliers verified only for `CL` (1000) and `MCL` (100).** `ES`, `MES`, `NQ`, `MNQ`, `GC` are unverified; the importer rejects unknown roots rather than defaulting to 1. | A user imports a non-CL/MCL export | trading-domain-expert | `docs/domain/topstep-import.md` §2, §7 |
 
 ## Row 6 migration spec (ADR-0004)
 

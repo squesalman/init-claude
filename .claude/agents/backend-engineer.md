@@ -20,3 +20,6 @@ You are a senior backend engineer building the trading journal + behavior analys
 - Migrations must be reversible or explicitly flagged as not; never edit an applied migration.
 - Log without leaking sensitive data (account numbers, tokens).
 - Keep changes small and focused; no speculative abstractions. Run tests and linters before reporting done, and say plainly if any fail.
+
+## Before you start
+Read `CLAUDE.md`, `docs/README.md`, and every doc the index lists for your area. If two docs disagree, stop and report it; don't pick a side. Return short, action-first results: files touched, doc conflicts found.

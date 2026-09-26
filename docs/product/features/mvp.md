@@ -218,7 +218,10 @@ at expected volume), `frontend-engineer` (templates + htmx).
 
 ## Open questions
 
-These need answers from a spec owner before the dependent story can be implemented;
+**Status 2026-09-26: all four answered** (see the "Answered by" line under each). Kept for the
+history of how the spec was routed; do not treat them as open.
+
+These needed answers from a spec owner before the dependent story could be implemented;
 routing per `CLAUDE.md`'s delegation rules rather than left for an engineer to invent:
 
 1. **R-multiple formula and required inputs** (story 2, 6) — R-multiple needs a defined
@@ -228,17 +231,22 @@ routing per `CLAUDE.md`'s delegation rules rather than left for an engineer to i
    (b) defer average R-multiple to v2 if this app doesn't want to ask for a stop.
    Assumption used above: (a), field is optional, trades without it are excluded from
    the R-multiple average and reflected in its sample size.
+   *Answered by:* `docs/domain/pnl-and-matching.md` §3 and ADR-0003 (three optional JournalEntry
+   columns: `stop_price`, `planned_risk_amount`, `risk_currency`).
 2. **Topstep CSV format** (story 3) — exact columns, whether Topstep exports raw fills
    or already-closed trades, and the dedupe key it provides. Route to
    `trading-domain-expert` to produce the mapping and test vectors before
    `backend-engineer` builds the importer.
+   *Answered by:* `docs/domain/topstep-import.md` and ADR-0004 (dedupe key includes account label).
 3. **Win rate tie-breaking** (story 6) — how a $0 net P&L trade counts (win, loss, or
    excluded from the denominator). Route to `trading-domain-expert`; needs to live in
    `docs/domain/` alongside the P&L formula.
+   *Answered by:* `docs/domain/pnl-and-matching.md` §2 (breakeven excluded from numerator and denominator).
 4. **P&L computation / fill→trade matching** (stories 2, 3, 6) — "executions are the
    source of truth; trades are derived" is a hard domain rule, but the actual matching
    algorithm (FIFO/LIFO, partial fills, multi-leg trades) isn't specified. Route to
    `trading-domain-expert`; this blocks both entry stories and the dashboard stats.
+   *Answered by:* `docs/domain/pnl-and-matching.md` §1 (FIFO, flat-to-flat) as amended by ADR-0004.
 
 ## Judgment calls made without asking (flagging for sanity-check)
 

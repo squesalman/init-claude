@@ -1,8 +1,11 @@
 # ADR-0003: Core data model (executions, derived trades, journal)
 
 - **Status:** Accepted; amended by [ADR-0004](0004-topstep-dedupe-and-pairing.md) (dedupe key, `broker_trade_id`, `skipped_conflict`, matcher grouping)
+- **Amendment 2026-09-26:** every [GUESS] below is closed; no schema change. `contract_multiplier` and
+  `fees` confirmed by `docs/domain/topstep-import.md` §2/§3/§5; `broker_account_label` changed by
+  ADR-0004; R-multiple columns confirmed by user ruling, rule in `docs/domain/pnl-and-matching.md` §3.
 - **Date:** 2026-09-22
-- **Deciders:** architect (proposed), user (to approve)
+- **Deciders:** architect (proposed), user (approved; confirmed 2026-09-26 during the alignment review)
 - **Depends on:** [ADR-0002](0002-stack-revised.md) (Django + Postgres, `NUMERIC` money, compute-on-read,
   `for_user()` chokepoint, RLS deferred), [`docs/product/features/mvp.md`](../product/features/mvp.md)
 - **Blocks:** `database-engineer` (DDL, migrations, indexes → `docs/data/`), `backend-engineer`
@@ -25,8 +28,9 @@ with three stats.
 CSV columns, R-multiple inputs, win-rate tie-breaking — the four open questions in `mvp.md`). That
 directory is empty at the time of writing. So this model must be **matcher-agnostic**: it stores the
 fields any FIFO/LIFO/average-cost matcher needs and takes no position on which one runs. Every place
-this ADR had to guess ahead of that spec is marked **[GUESS]** and listed again under
-"Assumptions made ahead of `docs/domain/`".
+this ADR had to guess ahead of that spec was marked **[GUESS]** and listed again under
+"Assumptions made ahead of `docs/domain/`". All have since been resolved (see the 2026-09-26
+amendment); the markers now read "resolved by <doc §>".
 
 ### Volume (from ADR-0002, unchanged)
 
@@ -115,13 +119,13 @@ recreates its executions; imported executions are never edited (re-import instea
 | `user_id` | `BIGINT NOT NULL REFERENCES accounts_user` | |
 | `broker` | `VARCHAR(32) NOT NULL` | `'topstep'`, or `'manual'` for hand entry |
 | `broker_execution_id` | `VARCHAR(128) NULL` | broker's fill/trade id; `NULL` for manual entry |
-| `broker_account_label` | `VARCHAR(64) NOT NULL DEFAULT ''` | the account/whatever string the export carries, kept verbatim. **[GUESS]** — no `account` table; see below |
+| `broker_account_label` | `VARCHAR(64) NOT NULL DEFAULT ''` | the account/whatever string the export carries, kept verbatim. No `account` table. Resolved by ADR-0004 §1: the export has no account column; the label is user-supplied on upload (`docs/product/features/import-account-label.md`), stored trimmed, and part of the dedupe key |
 | `symbol` | `VARCHAR(32) NOT NULL` | as the broker wrote it (`MNQZ5`), uppercased. No instrument table |
 | `side` | `VARCHAR(4) NOT NULL CHECK (side IN ('buy','sell'))` | a fill is buy/sell. long/short is a property of the *derived* trade |
 | `quantity` | `NUMERIC(20,10) NOT NULL CHECK (quantity > 0)` | always positive; direction lives in `side` |
 | `price` | `NUMERIC(20,10) NOT NULL CHECK (price >= 0)` | |
-| `contract_multiplier` | `NUMERIC(20,10) NOT NULL DEFAULT 1` | point value per contract (MNQ = 2, ES = 50). Stored per fill so a contract-spec change can never retroactively rewrite old P&L. `1` is correct for equities. **[GUESS]** |
-| `fees` | `NUMERIC(19,4) NOT NULL DEFAULT 0` | total cost of this fill (commission + exchange + clearing), positive = charged. **[GUESS]**: one column, not a breakdown |
+| `contract_multiplier` | `NUMERIC(20,10) NOT NULL DEFAULT 1` | point value per contract (MNQ = 2, ES = 50). Stored per fill so a contract-spec change can never retroactively rewrite old P&L. `1` is correct for equities. Resolved by `topstep-import.md` §2/§5: CL/MCL verified; importer looks it up by root and fails the row on an unknown root, never relying on the default |
+| `fees` | `NUMERIC(19,4) NOT NULL DEFAULT 0` | total cost of this fill (commission + exchange + clearing), positive = charged. One column, not a breakdown. Resolved by `topstep-import.md` §3/§5: `Fees + Commissions` summed onto the exit fill |
 | `currency` | `CHAR(3) NOT NULL` | ISO 4217, applies to `fees` and to P&L derived from this fill |
 | `executed_at` | `TIMESTAMPTZ NOT NULL` | UTC in the DB (`USE_TZ = True`), rendered in `user.timezone` |
 | `source` | `VARCHAR(8) NOT NULL CHECK (source IN ('manual','import'))` | |
@@ -197,8 +201,8 @@ that no matcher can invent or reassign without the underlying fill changing.
 | `opening_execution_id` | `BIGINT NOT NULL UNIQUE REFERENCES journal_execution ON DELETE CASCADE` | = the trade id. `OneToOneField` |
 | `note` | `TEXT NOT NULL DEFAULT ''` | optional reasoning (story 4) |
 | `rules_followed` | `BOOLEAN NULL` | `NULL` = **not yet answered**. See below |
-| `stop_price` | `NUMERIC(20,10) NULL` | R-multiple input, optional. **[GUESS]** |
-| `planned_risk_amount` | `NUMERIC(19,4) NULL` | R-multiple input, optional. **[GUESS]** |
+| `stop_price` | `NUMERIC(20,10) NULL` | R-multiple input, optional. Confirmed; R rule lives in `docs/domain/pnl-and-matching.md` §3 |
+| `planned_risk_amount` | `NUMERIC(19,4) NULL` | R-multiple input, optional. Confirmed; R rule lives in `docs/domain/pnl-and-matching.md` §3 |
 | `risk_currency` | `CHAR(3) NULL` | required iff `planned_risk_amount` is set (`CHECK`) |
 | `created_at`, `updated_at` | `TIMESTAMPTZ NOT NULL` | |
 
@@ -210,9 +214,8 @@ is a deliberate reading of story 4's "required": required *to count as journaled
 save a row*.
 
 The two risk columns live here because this is already the per-trade user-annotation table with the
-same key; a separate table for two nullable numbers would be a join for nothing. Open question 1 in
-`mvp.md` will pick stop-distance **or** risk-amount; both are nullable, and deleting the loser is a
-one-line migration.
+same key; a separate table for two nullable numbers would be a join for nothing. Both stay (user
+ruling, 2026-09-26); how they combine into R is `docs/domain/pnl-and-matching.md` §3.
 
 If a re-import ever shifts which fill opens a trade, the affected entries become orphaned rather than
 silently mis-attached — detectable (a journal entry whose `opening_execution_id` is not any derived
@@ -341,9 +344,9 @@ the database enforcing it.
 - **Sorting and filtering happen in Python, not SQL.** Correct, since P&L doesn't exist before
   matching, but it means pagination loads more than one page's worth. Named ceiling and upgrade path
   in the comment above.
-- **`contract_multiplier` is a guess.** If Topstep's export carries point value or per-contract P&L
-  directly, this column may be redundant — or wrong if the importer defaults it to 1 for futures.
-  Blocked on open question 2.
+- **`contract_multiplier` needs a per-root table in the importer.** Topstep's `PnL` is gross and
+  multiplier-adjusted, so the column is kept and cross-checked against it; unknown roots fail the
+  row instead of defaulting to 1. Resolved by `topstep-import.md` §2/§5 (only CL/MCL verified so far).
 - **One `fees` column, not a breakdown.** If a user wants commission separated from exchange fees,
   that is a column split later. Total fees is what net P&L needs.
 - **`rules_followed` nullable** means "required" is enforced in the UI and in the definition of
@@ -354,32 +357,35 @@ the database enforcing it.
   trade list, and — worse — the matcher may pair a fill from one account against another. If the
   export carries an account column, revisit before release: matching must group by
   `(symbol, broker_account_label)`, which is a matcher change, not a schema change. **Resolved by ADR-0004.**
-- **Two R-multiple columns where the spec will want one.** Costs a one-line migration to clean up.
+- **Two R-multiple columns.** Kept by user ruling; resolved by `docs/domain/pnl-and-matching.md` §3.
 
 ## Assumptions made ahead of `docs/domain/`
 
-`docs/domain/` was empty when this was written. Each item is a **[GUESS]** above; each is a column
-change at worst, not a redesign.
+`docs/domain/` was empty when this was written. Each item was a guess above; outcomes recorded
+2026-09-26. None needed a schema change beyond ADR-0004's.
 
-1. **`contract_multiplier` on the execution** — assumed futures P&L needs a point value and that it
-   must be stored per fill, not looked up. Defaults to 1 (correct for equities).
-2. **A single `fees` column per fill** — assumed the matcher wants total cost per fill, not a
-   commission/exchange/clearing breakdown.
+1. **`contract_multiplier` on the execution** — assumed futures P&L needs a point value stored per
+   fill. **Confirmed** by `topstep-import.md` §2/§5 (importer looks up by root, rejects unknown roots;
+   the `1` default is for manual/equity entry only).
+2. **A single `fees` column per fill** — assumed total cost per fill, not a breakdown. **Confirmed**
+   by `topstep-import.md` §3/§5 (`Fees + Commissions` summed onto the exit fill).
 3. **`side` is `buy`/`sell` on the fill; long/short is a property of the derived trade** — assumed,
-   because a fill has no direction of its own. If Topstep exports already-closed trades with a
-   long/short column, the importer maps it to two fills.
+   because a fill has no direction of its own. **Confirmed** by `topstep-import.md` §5 (`Type`
+   maps to entry/exit sides).
 4. **Topstep may export closed trades rather than raw fills** (open question 2). Accommodated without
    a schema change: the importer synthesizes two executions per row with derived ids
    (`<broker_trade_id>:entry`, `<broker_trade_id>:exit`), which keeps them unique and keeps the
-   dedupe index working. `database-engineer` and `backend-engineer` should not need to change the
-   schema whichever way the answer lands.
+   dedupe index working. **Confirmed** by `topstep-import.md` §5; pairing **changed by ADR-0004**
+   (`broker_trade_id` groups the two fills).
 5. **R-multiple inputs are `stop_price` and/or `planned_risk_amount` on the journal entry**
    (open question 1), both optional; trades without them are excluded from the average and reflected
-   in its sample size, per `mvp.md`.
-6. **`broker_account_label` exists in the export.** (Wrong for Topstep: no account column; see ADR-0004 open question 1.) Stored verbatim, unused by MVP. Empty string if
-   the export has no such column.
+   in its sample size, per `mvp.md`. **Confirmed** (user ruling); rule in
+   `docs/domain/pnl-and-matching.md` §3.
+6. **`broker_account_label` exists in the export.** **Changed by ADR-0004:** Topstep has no account
+   column (`topstep-import.md` §8). The label is user-supplied on upload
+   (`docs/product/features/import-account-label.md`), `''` when blank, and part of the dedupe key.
 7. **Win-rate tie-breaking (open question 3) needs no schema support** — it is a predicate over
-   derived `net_pnl`. Confirmed safe to leave to `docs/domain/`.
+   derived `net_pnl`. **Confirmed**, left to `docs/domain/`.
 
 ## Follow-ups
 
@@ -390,6 +396,5 @@ change at worst, not a redesign.
    test over `UserOwned.__subclasses__()`, and `derive_trades()` as a pure function in
    `journal/matching.py` — implementing `docs/domain/`'s algorithm and its test vectors, not
    inventing one.
-3. `trading-domain-expert`: the seven assumptions above are the review list. Items 1–4 are the ones
-   that could cost a column.
+3. ~~`trading-domain-expert`: review the seven assumptions above.~~ Done; outcomes recorded above.
 4. Revisit materialization only on a **measured** >300 ms dashboard, per ADR-0002.

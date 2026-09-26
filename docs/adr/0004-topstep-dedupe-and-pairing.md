@@ -180,9 +180,10 @@ brokers keep today's behaviour.
 
 ## Open questions
 
-1. **product-manager:** add an optional, non-required "Account" text input on the upload form to
-   populate `broker_account_label`? Default blank, trimmed, autocomplete from last-used labels.
-   Without it, the label stays `''` for every Topstep row. The dedupe change is then a no-op, and
-   the collision guard is the only defence. **Not decided here.**
+1. **RESOLVED 2026-09-26:** optional "Account" text input on the upload form, default blank,
+   trimmed, suggestions from last-used labels. Decided in
+   [`docs/product/features/import-account-label.md`](../../product/features/import-account-label.md)
+   (user ruling: "blank, delete yes"). Original question: without the input, the label stays `''`
+   for every Topstep row, the dedupe change is a no-op, and the collision guard is the only defence.
 2. **Still unverified (domain):** whether `Id`s overlap across accounts, and whether they stay
    stable across re-exports. Both need a real second export.

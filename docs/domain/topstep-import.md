@@ -70,8 +70,10 @@ Recommended importer safeguard, now that we know the `PnL` column is independent
 **when both a multiplier-table entry and a `PnL` column exist, compute
 `(ExitPrice − EntryPrice) × Size × multiplier × side_sign` and compare it to `PnL`.** A mismatch
 means either the multiplier table is missing/wrong for that root or something unexpected is in the
-row — surface it as an import warning rather than silently trusting either number. This is cheap
-because it's exactly the computation `derive_trades()` already does (§5).
+row. Per ADR-0004 §3 the row is marked `failed` with a reason and no executions are written
+(importing a P&L we know is wrong is worse than a visible failed row). Tolerance: exact `Decimal`
+equality on the dollar amount. This is cheap because it's exactly the computation
+`derive_trades()` already does (§5).
 
 ## 3. Fees, Commissions, and PnL — how they combine (verified arithmetically)
 
@@ -145,8 +147,9 @@ doesn't change the number.
 **Pairing (corrected, see ADR-0004 §3):** rows *can* overlap in time (§8 found 12 nested/overlapping
 same-direction pairs), so plain FIFO across rows would merge them into fewer trades. Both
 synthesized executions of a row get `broker_trade_id = Id`, and the matcher runs FIFO per
-`(account label, symbol, broker_trade_id)` — so each row yields exactly one trade. Test vector T4
-(ADR-0004) covers the nested case. Rows whose computed gross P&L disagrees with `PnL` are `failed`.
+`(account label, symbol, broker_trade_id)` — so each row yields exactly one trade, with exactly
+one entry lot (so a journal `stop_price` is a valid R input on any Topstep trade, see
+`pnl-and-matching.md` §3). Test vector T4 (§6) covers the nested case. Rows whose computed gross P&L disagrees with `PnL` are `failed`.
 
 ## 6. Test vectors
 
@@ -192,6 +195,26 @@ expected_trade = {
 # Vector T3: multiplier-table miss — must reject, not default to 1
 row = {"Id": "9000000003", "ContractName": "ZZZ99Z6", ...}  # root not in the multiplier table
 expected = "import row failed: unknown contract root, status='failed' in journal_rawimportrow, no execution created"
+
+# Vector T4 (ADR-0004): two nested same-direction rows, same contract -> two trades, not one.
+# Both legs of a row carry broker_trade_id = Id, so FIFO runs per row.
+rows = [
+  {"Id": "9000000010", "ContractName": "CLZ6", "Type": "Long", "Size": "1",   # inner
+   "EnteredAt": "12/19/2026 09:10:00 +00:00", "ExitedAt": "12/19/2026 09:20:00 +00:00",
+   "EntryPrice": "80.20", "ExitPrice": "80.10", "PnL": "-100.00", "Fees": "2.00", "Commissions": "1.00"},
+  {"Id": "9000000011", "ContractName": "CLZ6", "Type": "Long", "Size": "1",   # outer
+   "EnteredAt": "12/19/2026 09:00:00 +00:00", "ExitedAt": "12/19/2026 09:30:00 +00:00",
+   "EntryPrice": "80.00", "ExitPrice": "80.50", "PnL": "500.00", "Fees": "2.00", "Commissions": "1.00"},
+]
+expected_trades = [   # ordered by opened_at
+  {"opening": "9000000011:entry", "side": "long", "qty": 1, "entry_price": "80.00", "exit_price": "80.50",
+   "gross_pnl": "500.00", "fees": "3.00", "net_pnl": "497.00", "status": "closed"},
+  {"opening": "9000000010:entry", "side": "long", "qty": 1, "entry_price": "80.20", "exit_price": "80.10",
+   "gross_pnl": "-100.00", "fees": "3.00", "net_pnl": "-103.00", "status": "closed"},
+]
+# Trade count must be 2. Plain FIFO with broker_trade_id=None gives ONE merged trade (qty 2,
+# pairs 80.00->80.10 = +100 and 80.20->80.50 = +300, gross 400.00, net 394.00). Batch gross is
+# 400.00 either way. Companion test: same four executions, broker_trade_id=None -> one trade.
 ```
 
 ## 7. Open items (still unverified — flagged, not guessed)
@@ -246,7 +269,7 @@ violate on existing rows because all labels are `''`):**
 ```sql
 CREATE UNIQUE INDEX execution_broker_dedupe
   ON journal_execution (user_id, broker, broker_account_label, broker_execution_id)
-  WHERE broker_execution_id IS NOT NULL;
+  WHERE broker_execution_id IS NOT NULL AND broker_execution_id <> '';
 ```
 
 **Importer rules:**
@@ -258,7 +281,8 @@ CREATE UNIQUE INDEX execution_broker_dedupe
    Product-manager to confirm; it must not be required (journaling-friction principle).
 3. **Collision guard (needed with or without the label):** when a row is skipped as a duplicate,
    compare `symbol`, `side`, `quantity`, `price`, `executed_at` against the stored execution. If any
-   differ, do not skip silently: report it as a warning row ("id already exists with different
+   differ, or only one of a row's two legs exists, do not skip silently: the row gets status
+   `skipped_conflict` (ADR-0004 §2), no executions written, and is reported ("id already exists with different
    contents; possible second account, set the Account field"). This is the only way the per-account
    collision case becomes visible when the user left the field blank.
 4. UI hint: label is free text, so `Combine 50K` vs `combine-50k` is a user typo, not a key
@@ -266,16 +290,18 @@ CREATE UNIQUE INDEX execution_broker_dedupe
 5. Matcher: per ADR-0003 L355, group by `(symbol, broker_account_label)`, otherwise fills from two
    accounts pair against each other. With blank labels this is a no-op.
 
-**Separate issue found in the same check — DECIDED in ADR-0004 §3 (option (a) below, per-row pairing):** within one
+**Separate issue found in the same check — DECIDED in ADR-0004 §3 (this doc's option (a) below,
+per-row pairing via `broker_trade_id`; ADR-0004 labels the same choice "option (b)"):** within one
 contract, 12 row pairs overlap in time, all same direction (11 fully nested, 1 partial), i.e.
 concurrent same-direction positions. §5 says "no cross-row lot bleed expected", but a FIFO matcher
-over the synthesized executions will pair an outer row's entry with an inner row's exit. Per-trade
-`gross_pnl`, duration and R differ from the source `PnL` column, though the sum over the batch is
-unchanged when sizes match. This could be scale-ins in one account or copy-traded accounts (unknown
+over the synthesized executions will pair an outer row's entry with an inner row's exit. Plain FIFO would merge
+a nested pair into one trade, so there would be **fewer trades than rows**, and per-trade
+`gross_pnl`, duration and journal anchor would differ from the source, though the batch total is
+unchanged when sizes match. (Historical analysis; the decision above avoids this.) This could be scale-ins in one account or copy-traded accounts (unknown
 which; another reason to capture the label). Options for architect: (a) trust the export and keep
 one trade per row by matching within the row's own two executions (bypass FIFO for closed-trade
-imports), or (b) accept FIFO re-pairing. Recommend (a) for imports, verified with the `PnL`
-cross-check in §2. Add a test vector with two nested same-direction rows before implementing.
+imports), or (b) accept FIFO re-pairing. (a) was chosen, verified with the `PnL`
+cross-check in §2. The two-nested-rows vector is T4 in §6.
 
 **Still unknown:** cross-account id overlap (needs an export from a user with two accounts), re-export
 id stability, and whether a TopstepX export from a specific account ever carries an account column.
