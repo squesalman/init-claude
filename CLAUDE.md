@@ -51,10 +51,12 @@ Project subagents live in `.claude/agents/`. **The main session is the orchestra
 | `behavior-analyst` | sonnet | Behavior detectors and insight wording |
 | `ux-designer` | sonnet | Flows, wireframes, design system |
 | `database-engineer` | sonnet | Schema/DDL, migrations, indexes, query performance, analytics SQL, seed data |
-| `backend-engineer` | sonnet | APIs, importers, analytics services, auth (application code) |
-| `frontend-engineer` | sonnet | UI, tables, charts, journaling forms |
+| `backend-engineer` | opus 5.5 | APIs, importers, analytics services, auth (application code) |
+| `frontend-engineer` | opus 5.5 | UI, tables, charts, journaling forms |
 | `qa-engineer` | sonnet | Test plans, running tests, verifying calculations |
 | `security-reviewer` | opus | Auth, tenant isolation, uploads, credentials, privacy (read-only) |
+
+Model policy: only `backend-engineer` and `frontend-engineer` run on Opus 5.5 (`model: claude-opus-5-5` in their agent files); `architect` and `security-reviewer` stay on `opus`; the rest stay on `sonnet`. `code-review` is a skill, not an agent: it runs on the session's model, so run it from an Opus session.
 
 ### Delegation workflow
 Default pipeline for a new feature — skip steps that don't apply:
