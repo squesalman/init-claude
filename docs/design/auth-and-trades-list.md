@@ -487,7 +487,7 @@ Settings: `LOGIN_URL="/login/"`, `LOGIN_REDIRECT_URL="/trades/"`, `LOGOUT_REDIRE
 1. **Account label on trades** (`backend-engineer`). Confirm it can be derived from the opening execution for every trade, including multi-leg manual trades with mixed labels (not expected).
 2. **App name** for the nav and page titles ("Trading Journal" is a placeholder) (`product-manager`, user).
 3. **No password reset** (mvp story 1 flags it) (`product-manager`, user). A forgotten password locks a user out; before any non-author user, add reset or accept and say so. The confirm field reduces typos but does not remove this.
-5. **Cross-doc note, not a conflict:** mvp.md story 6 cites ADR-0001 for htmx list updates, but ADR-0001 is superseded by ADR-0002. Decision 9 (full-page sorting) is allowed by story 6's "standard server-rendered pagination/requests" wording (`product-manager` to fix the citation).
+5. **RESOLVED:** `mvp.md` now cites ADR-0002 (was superseded ADR-0001, fixed in bc8da34). Decision 9 (full-page sorting) is allowed by story 6's "standard server-rendered pagination/requests" wording.
 6. **Non-USD trades** (`architect`, `trading-domain-expert`). Card and cell strings hard-code `$` per the PM spec. If a non-TopstepX or non-USD import ever arrives, the strings and per-currency grouping need a decision. Not needed for slice 1.
 
 ### Conflicts found
