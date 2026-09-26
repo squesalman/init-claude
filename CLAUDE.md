@@ -16,7 +16,7 @@ Chosen in `docs/adr/0002-stack-revised.md` (supersedes `docs/adr/0001-stack.md`)
 
 Python 3.12 · Django 5.2 LTS · Postgres 16+ · Django ORM · `django-ninja` (JSON endpoints, added per page on demand) · Django templates + htmx + Alpine + Tailwind (standalone CLI, no `node_modules`) · `django.contrib.auth` sessions · pytest + pytest-django · uv.
 
-- Dev: `docker compose up -d` (Postgres only; the app runs on the host via `uv run manage.py runserver`).
+- Dev: `docker compose up -d` (Postgres only; the app runs on the host via `uv run --env-file .env manage.py runserver`). Copy `.env.example` to `.env` first: settings fail closed without `DJANGO_SECRET_KEY`, so every `uv run` (manage.py, pytest) needs `--env-file .env`.
 - Prod: Docker Compose (web + db + caddy) on a rented VPS; deploy with `git pull && docker compose -f compose.prod.yaml up -d --build`; `pg_dump` on cron to off-box storage from day one.
 - Money: `NUMERIC(19,4)` + ISO 4217 currency column. Prices/quantities: `NUMERIC(20,10)`. `Decimal` end to end, never floats. Round explicitly at computation, never at display.
 - No background worker; metrics computed on read. No SPA, no Redis/Celery, no pandas.
