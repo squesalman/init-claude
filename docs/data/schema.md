@@ -47,7 +47,7 @@ Verbatim CSV rows, re-parseable. `user_id` denormalized here rather than reached
 | `import_batch_id` | `BIGINT FK → journal_importbatch` | no | `ON DELETE CASCADE` |
 | `line_number` | `INTEGER` | no | 1-based |
 | `raw` | `JSONB` | no | `{header: cell}`, strings only, no coercion. **Lossless-reparse note, round-6 code review, document-only — no importer exists yet**: `JSONB` can re-normalize numeric literals on write (precision/format drift — trailing zeros, exponent notation), which would violate CLAUDE.md's "keep raw data so parsing can be re-run" guarantee for anything numeric. Any future importer **must** serialize numeric values into this field as strings, never native Python `float`/`int`, to stay byte-for-byte lossless. Matching comment on the field in `journal/models.py`. |
-| `status` | `VARCHAR(20)` | no | `CHECK (status IN ('imported','skipped_duplicate','failed'))` — `rawimportrow_status_valid`. Matches ADR-0003's `VARCHAR(20)` (corrected upstream from an original `VARCHAR(16)` that couldn't fit its own `'skipped_duplicate'` enum value). **Round-8 code review**: the constraint's allowed-values list is derived from the same `STATUS_CHOICES` tuple the field's `choices=` uses (`[c[0] for c in _STATUS_CHOICES]`), not a second hardcoded list — the two could otherwise drift independently. This (and the equivalent fix for `Execution.side`/`source` below) required moving the `*_CHOICES` tuples to module-level constants: a model's nested `Meta` class can't see names defined in the *enclosing* model class's own body (confirmed empirically — Python's class-scope rule, not a Django quirk), only module globals, so a `CheckConstraint` inside `Meta` literally cannot reference a class attribute like `STATUS_CHOICES` directly. The model class attributes of the same name (`RawImportRow.STATUS_CHOICES`, `Execution.SIDE_CHOICES`, etc.) still exist and work exactly as before for any external reference — they just point at the module constants now. |
+| `status` | `VARCHAR(20)` | no | `CHECK (status IN ('imported','skipped_duplicate','failed','skipped_conflict'))` — `rawimportrow_status_valid`. `skipped_conflict` added in migration `0003` (ADR-0004 §2): id already imported with different contents; the row's `error` says why; no executions written. Matches ADR-0003's `VARCHAR(20)` (corrected upstream from an original `VARCHAR(16)` that couldn't fit its own `'skipped_duplicate'` enum value). **Round-8 code review**: the constraint's allowed-values list is derived from the same `STATUS_CHOICES` tuple the field's `choices=` uses (`[c[0] for c in _STATUS_CHOICES]`), not a second hardcoded list — the two could otherwise drift independently. This (and the equivalent fix for `Execution.side`/`source` below) required moving the `*_CHOICES` tuples to module-level constants: a model's nested `Meta` class can't see names defined in the *enclosing* model class's own body (confirmed empirically — Python's class-scope rule, not a Django quirk), only module globals, so a `CheckConstraint` inside `Meta` literally cannot reference a class attribute like `STATUS_CHOICES` directly. The model class attributes of the same name (`RawImportRow.STATUS_CHOICES`, `Execution.SIDE_CHOICES`, etc.) still exist and work exactly as before for any external reference — they just point at the module constants now. |
 | `error` | `TEXT` | no, default `''` | shown to the user, never silently dropped |
 
 Constraints: `UNIQUE (import_batch_id, line_number)`; `CHECK (status IN (...))` above — code review
@@ -67,7 +67,8 @@ Immutable by convention (never `UPDATE`d; corrections delete+recreate).
 |---|---|---|---|
 | `broker` | `VARCHAR(32)` | no | `'topstep'` or `'manual'` |
 | `broker_execution_id` | `VARCHAR(128)` | yes | `NULL` for manual entry. The dedupe `UniqueConstraint` below (`execution_broker_dedupe`) exempts both `NULL` **and** empty string — see that constraint's note |
-| `broker_account_label` | `VARCHAR(64)` | no, default `''` | verbatim from export; no account table yet |
+| `broker_account_label` | `VARCHAR(64)` | no, default `''` | verbatim from export; no account table yet. Part of the dedupe key (ADR-0004 §1); blank labels compare equal |
+| `broker_trade_id` | `VARCHAR(128)` | yes | broker-reported round-trip id (Topstep row `Id`), set on both legs; `NULL` for manual / fill-only imports. Matcher bucket key (ADR-0004 §3). `CHECK (broker_trade_id IS NULL OR broker_trade_id <> '')` — `execution_broker_trade_id_not_blank` (a stray `''` would merge unrelated trades) |
 | `symbol` | `VARCHAR(32)` | no | uppercased, as broker wrote it |
 | `side` | `VARCHAR(4)` | no | `CHECK (side IN ('buy','sell'))`. Derived from `SIDE_CHOICES` the same way as `status` above (round-8 code review) — see that note |
 | `quantity` | `NUMERIC(20,10)` | no | `CHECK (quantity > 0)`. Always positive; direction lives in `side` |
@@ -82,10 +83,14 @@ Immutable by convention (never `UPDATE`d; corrections delete+recreate).
 
 Constraints/indexes:
 
-- `UNIQUE (user_id, broker, broker_execution_id) WHERE broker_execution_id IS NOT NULL AND
-  broker_execution_id != ''` — `execution_broker_dedupe`. This *is* idempotent import; no
+- `UNIQUE (user_id, broker, broker_account_label, broker_execution_id) WHERE
+  broker_execution_id IS NOT NULL AND broker_execution_id != ''` — `execution_broker_dedupe`.
+  **Widened from 3 to 4 columns in migration `0003` (ADR-0004 §1)** so the same broker id in
+  two accounts is not a duplicate; the `WHERE` is unchanged. Rolling `0003` back restores the
+  3-column index and fails if rows differing only by label exist. The `EXPLAIN` note below
+  was measured on the 3-column form; not re-measured on the 4-column one. This *is* idempotent import; no
   importer-side locking needed. Verified with `EXPLAIN`: a lookup by
-  `(user_id, broker, broker_execution_id)` uses this index directly (`Index Scan using
+  `(user_id, broker, broker_execution_id)` used this index directly (`Index Scan using
   execution_broker_dedupe`). **Extended round-6 code review** to also exclude empty string,
   not just `NULL`: a hand-rolled write path persisting `""` instead of `None` would
   otherwise create spurious collisions between unrelated manual entries, since `""` is
