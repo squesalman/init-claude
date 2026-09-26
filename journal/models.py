@@ -6,12 +6,38 @@ territory) — there is deliberately no `trade` table here.
 
 from django.conf import settings
 from django.db import models
-from django.db.models.expressions import RawSQL
+from django.db.models.functions import Length
+from django.db.models.lookups import LessThanOrEqual
 
 # ADR-0003 assumes Topstep exports are "tens of KB." 10 MB is a generous cap (roughly
 # 100-1000x that) — a sanity/abuse guard against a malformed or hostile upload, not a
 # tight limit expected to bind on legitimate files.
 MAX_RAW_FILE_BYTES = 10 * 1024 * 1024
+
+# Module-level, not just class attributes (round-8 code review): a CheckConstraint
+# inside a model's nested Meta class can't see names defined in the enclosing model's
+# own class body — only module globals — so each *_CHOICES tuple used by both a field's
+# choices= and its matching CheckConstraint lives here. The model class attributes of
+# the same name (RawImportRow.STATUS_CHOICES, Execution.SIDE_CHOICES, etc.) just point
+# at these, keeping every existing external reference working unchanged, while the
+# constraints below derive from the identical objects instead of a second hardcoded
+# list that could drift from the choices independently.
+_STATUS_IMPORTED = "imported"
+_STATUS_SKIPPED_DUPLICATE = "skipped_duplicate"
+_STATUS_FAILED = "failed"
+_STATUS_CHOICES = [
+    (_STATUS_IMPORTED, "Imported"),
+    (_STATUS_SKIPPED_DUPLICATE, "Skipped (duplicate)"),
+    (_STATUS_FAILED, "Failed"),
+]
+
+_SIDE_BUY = "buy"
+_SIDE_SELL = "sell"
+_SIDE_CHOICES = [(_SIDE_BUY, "Buy"), (_SIDE_SELL, "Sell")]
+
+_SOURCE_MANUAL = "manual"
+_SOURCE_IMPORT = "import"
+_SOURCE_CHOICES = [(_SOURCE_MANUAL, "Manual"), (_SOURCE_IMPORT, "Import")]
 
 
 class UserScopedManager(models.Manager):
@@ -166,7 +192,15 @@ class UserOwned(models.Model):
     then, per ADR-0003's "Tenant isolation" section.
     """
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    # db_index=False (round-8 code review): a plain ForeignKey gets Django's automatic
+    # single-column index by default, which is redundant here — every concrete
+    # subclass already has an explicit composite index leading with `user`
+    # (e.g. execution_user_symbol_ts_idx, importbatch_user_uploaded_idx), which a
+    # leading-column btree already serves a plain `user_id = ?` lookup from just as
+    # well as a dedicated single-column index would.
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, db_index=False
+    )
 
     objects = UserScopedManager()
     # Explicit, named escape hatch: a plain, unrestricted manager. Used by Django
@@ -326,13 +360,18 @@ class ImportBatch(UserOwned):
         constraints = [
             # DB-level backstop for the field's max_length validator above — that only
             # runs on full_clean() (e.g. a ModelForm), not on a plain .save()/.create().
-            # octet_length() is Postgres-specific, fair game per ADR-0002.
+            # Length(raw_file) <= N, not RawSQL("octet_length(raw_file) <= %s", ...)
+            # (round-8 code review): the RawSQL version expressed the identical
+            # constraint (Postgres's length(bytea) returns byte count, same as
+            # octet_length(bytea)) but Django's checker can't introspect raw SQL, hence
+            # the models.W045 warning that used to be silenced in settings.py. Length()
+            # is an ORM expression Django CAN verify, so the warning is gone outright
+            # rather than suppressed. LessThanOrEqual(...) instead of a `__lte` lookup
+            # because `length` isn't a lookup registered on BinaryField by default
+            # (unlike CharField/TextField) — constructing the Lookup class directly
+            # avoids registering a new lookup globally for one constraint.
             models.CheckConstraint(
-                condition=RawSQL(
-                    "octet_length(raw_file) <= %s",
-                    (MAX_RAW_FILE_BYTES,),
-                    output_field=models.BooleanField(),
-                ),
+                condition=LessThanOrEqual(Length("raw_file"), MAX_RAW_FILE_BYTES),
                 name="importbatch_raw_file_size_limit",
             ),
         ]
@@ -347,14 +386,10 @@ class ImportBatch(UserOwned):
 class RawImportRow(UserOwned):
     """Verbatim CSV rows, re-parseable (ADR-0003 §3)."""
 
-    STATUS_IMPORTED = "imported"
-    STATUS_SKIPPED_DUPLICATE = "skipped_duplicate"
-    STATUS_FAILED = "failed"
-    STATUS_CHOICES = [
-        (STATUS_IMPORTED, "Imported"),
-        (STATUS_SKIPPED_DUPLICATE, "Skipped (duplicate)"),
-        (STATUS_FAILED, "Failed"),
-    ]
+    STATUS_IMPORTED = _STATUS_IMPORTED
+    STATUS_SKIPPED_DUPLICATE = _STATUS_SKIPPED_DUPLICATE
+    STATUS_FAILED = _STATUS_FAILED
+    STATUS_CHOICES = _STATUS_CHOICES
 
     import_batch = models.ForeignKey(
         ImportBatch, on_delete=models.CASCADE, related_name="rows"
@@ -379,10 +414,26 @@ class RawImportRow(UserOwned):
                 fields=["import_batch", "line_number"],
                 name="rawimportrow_batch_line_uniq",
             ),
+            # Derived from _STATUS_CHOICES (the same object STATUS_CHOICES points at),
+            # not a second hardcoded list (round-8 code review): the two could
+            # otherwise drift independently if a status value is ever added/renamed and
+            # only one of them gets updated.
             models.CheckConstraint(
-                condition=models.Q(status__in=["imported", "skipped_duplicate", "failed"]),
+                condition=models.Q(status__in=[c[0] for c in _STATUS_CHOICES]),
                 name="rawimportrow_status_valid",
             ),
+        ]
+        indexes = [
+            # Unlike ImportBatch/Execution/JournalEntry, this model has no composite
+            # index leading with `user` (its only other index is the
+            # (import_batch, line_number) unique constraint above, which doesn't help a
+            # plain `user_id = ?` filter) — ADR-0003 never specified one here either.
+            # UserOwned.user now has db_index=False (round-8 code review: the automatic
+            # single-column FK index was redundant on the other three models, which all
+            # have a composite index leading with `user`), so this one needs its own
+            # explicit index to keep `for_user()` queries on this model index-backed
+            # rather than silently falling back to a full table scan.
+            models.Index(fields=["user"], name="rawimportrow_user_idx"),
         ]
 
     def __str__(self) -> str:
@@ -396,13 +447,13 @@ class Execution(UserOwned):
     never edited (re-import instead).
     """
 
-    SIDE_BUY = "buy"
-    SIDE_SELL = "sell"
-    SIDE_CHOICES = [(SIDE_BUY, "Buy"), (SIDE_SELL, "Sell")]
+    SIDE_BUY = _SIDE_BUY
+    SIDE_SELL = _SIDE_SELL
+    SIDE_CHOICES = _SIDE_CHOICES
 
-    SOURCE_MANUAL = "manual"
-    SOURCE_IMPORT = "import"
-    SOURCE_CHOICES = [(SOURCE_MANUAL, "Manual"), (SOURCE_IMPORT, "Import")]
+    SOURCE_MANUAL = _SOURCE_MANUAL
+    SOURCE_IMPORT = _SOURCE_IMPORT
+    SOURCE_CHOICES = _SOURCE_CHOICES
 
     broker = models.CharField(max_length=32)
     broker_execution_id = models.CharField(max_length=128, null=True, blank=True)
@@ -443,8 +494,11 @@ class Execution(UserOwned):
                 ),
                 name="execution_broker_dedupe",
             ),
+            # Derived from _SIDE_CHOICES, not a second hardcoded list (round-8 code
+            # review) — same rationale as rawimportrow_status_valid above.
             models.CheckConstraint(
-                condition=models.Q(side__in=["buy", "sell"]), name="execution_side_valid"
+                condition=models.Q(side__in=[c[0] for c in _SIDE_CHOICES]),
+                name="execution_side_valid",
             ),
             models.CheckConstraint(
                 condition=models.Q(quantity__gt=0), name="execution_quantity_positive"
@@ -460,8 +514,10 @@ class Execution(UserOwned):
             models.CheckConstraint(
                 condition=~models.Q(price=0), name="execution_price_not_zero"
             ),
+            # Derived from _SOURCE_CHOICES, not a second hardcoded list (round-8 code
+            # review) — same rationale as rawimportrow_status_valid above.
             models.CheckConstraint(
-                condition=models.Q(source__in=["manual", "import"]),
+                condition=models.Q(source__in=[c[0] for c in _SOURCE_CHOICES]),
                 name="execution_source_valid",
             ),
             # contract_multiplier is the P&L multiplier (point value per contract) — a

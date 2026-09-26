@@ -91,60 +91,27 @@ def test_create_user_rejects_case_variant_duplicate_email_via_full_clean():
 
 
 @pytest.mark.django_db
-def test_get_or_create_rejects_invalid_timezone():
+def test_get_or_create_and_update_or_create_are_not_supported():
     """
-    Round-7 code review, same class of bug as round 3's already-fixed one: Django's
-    default QuerySet.get_or_create()/update_or_create() construct and save a User
-    directly on the create path without ever routing through _create_user() or calling
-    full_clean() — silently bypassing validate_timezone via a different call path than
-    the one round 3 fixed. Confirmed live: User.objects.get_or_create(email=<new email>,
-    defaults={"timezone": "Not/A_Real_Zone"}) succeeded. Fixed by routing the create path
-    through _create_user(), same as create_user() does.
+    Round-7 added a hand-rolled get_or_create()/update_or_create() to close a
+    full_clean()-bypass gap; round 8 found the hand-rolling itself was buggy:
+    update_or_create()'s update path did setattr() straight onto the instance, so
+    defaults={"password": "..."} would have written a PLAINTEXT password; both methods
+    did a case-sensitive self.get(**kwargs) lookup while uniqueness is enforced
+    case-insensitively, so an existing "Foo@Example.com" wasn't found by
+    get_or_create(email="foo@example.com") and fell through to create, hitting an
+    uncaught IntegrityError; and neither had Django's own transaction/retry-on-race or
+    lookup-suffix stripping. Root cause: nothing in this codebase calls either method —
+    removed entirely rather than hand-rolled correctly for a caller that doesn't exist
+    yet. Both now refuse to run.
     """
-    with pytest.raises(ValidationError):
-        User.objects.get_or_create(
-            email="badtz-goc@example.com",
-            defaults={"password": "x", "timezone": "Not/A_Real_Zone"},
-        )
+    with pytest.raises(NotImplementedError):
+        User.objects.get_or_create(email="x@example.com", defaults={"password": "x"})
 
-    assert not User.objects.filter(email="badtz-goc@example.com").exists()
+    with pytest.raises(NotImplementedError):
+        User.objects.update_or_create(email="x@example.com", defaults={"password": "x"})
 
-
-@pytest.mark.django_db
-def test_get_or_create_returns_existing_user_without_recreating():
-    """Sanity check alongside the test above: the normal, valid-input path still works —
-    get_or_create() isn't just blocked outright, only unvalidated creation is."""
-    existing = User.objects.create_user(email="goc@example.com", password="x")
-
-    user, created = User.objects.get_or_create(
-        email="goc@example.com", defaults={"password": "y"}
-    )
-    assert not created
-    assert user.pk == existing.pk
-
-
-@pytest.mark.django_db
-def test_update_or_create_rejects_invalid_timezone_on_create_path():
-    """update_or_create()'s create path has the same bug shape as get_or_create()'s."""
-    with pytest.raises(ValidationError):
-        User.objects.update_or_create(
-            email="badtz-uoc@example.com",
-            defaults={"password": "x", "timezone": "Not/A_Real_Zone"},
-        )
-
-    assert not User.objects.filter(email="badtz-uoc@example.com").exists()
-
-
-@pytest.mark.django_db
-def test_update_or_create_rejects_invalid_timezone_on_update_path():
-    """And the update path: applying defaults to an existing row must also run
-    full_clean() before saving, not just the create path."""
-    User.objects.create_user(email="uoc@example.com", password="x")
-
-    with pytest.raises(ValidationError):
-        User.objects.update_or_create(
-            email="uoc@example.com", defaults={"timezone": "Not/A_Real_Zone"}
-        )
+    assert not User.objects.filter(email="x@example.com").exists()
 
 
 @pytest.mark.django_db

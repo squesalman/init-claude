@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, connection, transaction
+from django.db.models.deletion import RestrictedError
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
@@ -646,3 +647,25 @@ def test_user_delete_cascades_all_owned_rows_in_one_call():
     for model, row in rows.items():
         assert not model.unscoped.filter(pk=row.pk).exists(), model.__name__
     assert not User.objects.filter(pk=user.pk).exists()
+
+
+@pytest.mark.django_db
+def test_standalone_execution_delete_is_restricted_by_journal_entry():
+    """
+    Round-8 code review: no test exercised a standalone execution.delete() while a
+    JournalEntry still references it via opening_execution (on_delete=RESTRICT) — the
+    only existing delete test (above) covers the user.delete() cascade path, where
+    RESTRICT never actually fires (it's the same operation deleting both rows
+    together). This is the other path: deleting just the execution, on its own, must
+    raise RestrictedError, not silently cascade-delete (or orphan) the journal entry.
+    """
+    user = User.objects.create_user(email="gg@example.com", password="x")
+    execution = _make_execution(user)
+    entry = JournalEntry.objects.create(user=user, opening_execution=execution)
+
+    with pytest.raises(RestrictedError):
+        execution.delete()
+
+    # Neither row was touched: RESTRICT blocks the delete outright.
+    assert Execution.unscoped.filter(pk=execution.pk).exists()
+    assert JournalEntry.unscoped.filter(pk=entry.pk).exists()

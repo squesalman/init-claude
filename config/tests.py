@@ -94,3 +94,43 @@ def test_secret_key_placeholder_falls_back_to_dev_default_when_debug_true():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_secret_key_rejects_django_insecure_prefix_when_debug_false():
+    """
+    Round-8 code review: broadened beyond the one exact placeholder. Any value starting
+    with "django-insecure-" is Django's own `startproject` default-key prefix — the
+    realistic leftover-default scenario (more likely in practice than someone leaving
+    the literal CHANGE-ME placeholder from .env.example in place) — and must be
+    rejected the same way when DEBUG=False.
+    """
+    result = _run_check(
+        DJANGO_DEBUG="false",
+        DJANGO_SECRET_KEY="django-insecure-some-leftover-startproject-default-key",
+    )
+
+    assert result.returncode != 0
+    assert "ImproperlyConfigured" in result.stderr
+    assert "DJANGO_SECRET_KEY" in result.stderr
+
+
+def test_secret_key_django_insecure_prefix_falls_back_to_dev_default_when_debug_true():
+    """Same DEBUG=False-only carve-out as the other two rejection cases."""
+    result = _run_check(
+        DJANGO_DEBUG="true",
+        DJANGO_SECRET_KEY="django-insecure-some-leftover-startproject-default-key",
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_secret_key_real_value_not_starting_with_django_insecure_still_boots():
+    """Sanity check alongside the two rejection tests above: a real production key
+    (not matching either bad pattern) must still work — this isn't rejecting on
+    length or some other property, only the two known-bad shapes."""
+    result = _run_check(
+        DJANGO_DEBUG="false",
+        DJANGO_SECRET_KEY="a-completely-different-real-production-secret-key",
+    )
+
+    assert result.returncode == 0, result.stderr

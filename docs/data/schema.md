@@ -15,7 +15,7 @@ territory per ADR-0003 §5).
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
 | `id` | `BIGINT` (identity) | no | PK |
-| `email` | `VARCHAR(254)` | no | `254` is `EmailField`'s own built-in default, not an explicit `max_length=` on the field (**round-6 cleanup**: dropped an explicit `max_length=254` that just restated Django's default — `makemigrations` confirms no schema change resulted). `USERNAME_FIELD`. Case-insensitive uniqueness via `UNIQUE (lower(email))`, **not** the `CITEXT` extension — ADR-0003 §1 names this as an acceptable substitute. Django's `auth.E003` check doesn't recognize expression-based `UniqueConstraint`s, so it's silenced in `config/settings.py` with a comment; the DB guarantee is unaffected and is *stricter* than what the check looks for. Login (`UserManager.get_by_natural_key`) filters on `.annotate(email_lower=Lower("email")).get(email_lower=Lower(Value(raw_email)))`, **not** `email__iexact=value` — `__iexact` compiles to `UPPER(email) = UPPER(%s)`, which doesn't match this index and forces a seq scan on every login attempt (verified with `EXPLAIN`, round-2 code review: `iexact` → `Seq Scan on accounts_user`; the `Lower()` annotation → `Index Scan using accounts_user_email_lower_uniq`). **Also not** `email_lower=email.lower()` (round-7 code review — that was this method's shape between rounds 2 and 7): lowering the login input in *Python* while the index and the annotation both lower in *SQL* disagrees for non-ASCII characters under a C/POSIX collation (the default for the `postgres:16-alpine` image `compose.yaml` uses). Confirmed live: Postgres's `lower('İstanbul@example.com')` gives `'istanbul@example.com'` (20 chars, plain ASCII `i`), while Python's `"İstanbul@example.com".lower()` gives `'i̇stanbul@example.com'` (21 chars — `İ`, U+0130, folds to `i` + a combining dot above under Python's full Unicode case folding). These don't match character-for-character, so a user could fail to log in with the *exact* email they registered with. Fixed by lowering the login input in SQL too (`Lower(Value(email))`), so both sides of the comparison go through the same (Postgres) lowering rules instead of mixing Python and SQL. `UserManager._create_user()`'s missing-email guard raises `ValidationError`, not `ValueError` (**round-4 code review**, for consistency — every other invalid-field case in `_create_user()` is caught via `full_clean()` and raises `ValidationError`; a caller only needs to catch one exception type). **`get_or_create()`/`update_or_create()` are also overridden on `UserManager`** (round-7 code review, same bug class as round 3's `create_user()` fix): Django's default implementations construct-and-save a `User` directly on the create path without ever calling `full_clean()`, silently bypassing `validate_timezone` and every other field validator via a different call path than `create_user()`'s. Confirmed live: `User.objects.get_or_create(email=<new>, defaults={"timezone": "Not/A_Real_Zone"})` succeeded. Both overrides route creation through `_create_user()`; `update_or_create()`'s update-existing-row path also calls `full_clean()` before saving. |
+| `email` | `VARCHAR(254)` | no | `254` is `EmailField`'s own built-in default, not an explicit `max_length=` on the field (**round-6 cleanup**: dropped an explicit `max_length=254` that just restated Django's default — `makemigrations` confirms no schema change resulted). `USERNAME_FIELD`. Case-insensitive uniqueness via `UNIQUE (lower(email))`, **not** the `CITEXT` extension — ADR-0003 §1 names this as an acceptable substitute. Django's `auth.E003` check doesn't recognize expression-based `UniqueConstraint`s, so it's silenced in `config/settings.py` with a comment; the DB guarantee is unaffected and is *stricter* than what the check looks for. Login (`UserManager.get_by_natural_key`) filters on `.annotate(email_lower=Lower("email")).get(email_lower=Lower(Value(raw_email)))`, **not** `email__iexact=value` — `__iexact` compiles to `UPPER(email) = UPPER(%s)`, which doesn't match this index and forces a seq scan on every login attempt (verified with `EXPLAIN`, round-2 code review: `iexact` → `Seq Scan on accounts_user`; the `Lower()` annotation → `Index Scan using accounts_user_email_lower_uniq`). **Also not** `email_lower=email.lower()` (round-7 code review — that was this method's shape between rounds 2 and 7): lowering the login input in *Python* while the index and the annotation both lower in *SQL* disagrees for non-ASCII characters under a C/POSIX collation (the default for the `postgres:16-alpine` image `compose.yaml` uses). Confirmed live: Postgres's `lower('İstanbul@example.com')` gives `'istanbul@example.com'` (20 chars, plain ASCII `i`), while Python's `"İstanbul@example.com".lower()` gives `'i̇stanbul@example.com'` (21 chars — `İ`, U+0130, folds to `i` + a combining dot above under Python's full Unicode case folding). These don't match character-for-character, so a user could fail to log in with the *exact* email they registered with. Fixed by lowering the login input in SQL too (`Lower(Value(email))`), so both sides of the comparison go through the same (Postgres) lowering rules instead of mixing Python and SQL. `UserManager._create_user()`'s missing-email guard raises `ValidationError`, not `ValueError` (**round-4 code review**, for consistency — every other invalid-field case in `_create_user()` is caught via `full_clean()` and raises `ValidationError`; a caller only needs to catch one exception type). **`get_or_create()`/`update_or_create()` are explicitly unsupported on `UserManager`**, not hand-rolled: round 7 added an override to close a `full_clean()`-bypass gap (Django's defaults construct-and-save a `User` directly on the create path without calling `full_clean()`, silently bypassing `validate_timezone` — confirmed live), but **round 8 found the hand-rolling itself was buggy** — `update_or_create()`'s update path did `setattr()` straight onto the instance, so `defaults={"password": "..."}` would have written a **plaintext password** (the create path correctly used `set_password()`, the update path didn't); both methods did a case-sensitive `self.get(**kwargs)` lookup while uniqueness is case-insensitive, so an existing `"Foo@Example.com"` wasn't found by `get_or_create(email="foo@example.com")` and fell through to create, hitting an uncaught `IntegrityError`; and neither had Django's own transaction wrapping/retry-on-race or lookup-suffix stripping. Root cause: nothing in this codebase calls either method — this was closing a hypothetical gap, and hand-rolling Django's `get_or_create`/`update_or_create` semantics correctly is real surface area for zero current benefit. Removed entirely; both now raise `NotImplementedError` pointing callers at `create_user()` for creation and an explicit `set_password()` + `full_clean()` + `save()` for updates. If/when a real caller needs this (e.g. an admin-assisted password reset flow), build it correctly at that point, scoped to the actual call shape needed. |
 | `password` | `VARCHAR(128)` | no | Django PBKDF2 hash |
 | `timezone` | `VARCHAR(64)` | no, default `'UTC'` | IANA name, validated against `accounts.models._AVAILABLE_TIMEZONES` — `frozenset(zoneinfo.available_timezones())` computed once at import time, not re-scanned per call (no DB-level check — the set changes only with a tzdata upgrade + process restart, hence a plain module constant rather than a `CHECK` or a per-call cache). Actually enforced on the only signup path: `UserManager._create_user()` calls `full_clean()` before `save()` — **fixed in code review, round 3**: it previously only constructed and saved the model directly, so `validate_timezone` (a field validator, which only runs via `full_clean()`) never ran; `create_user(timezone="Not/A_Real_Zone")` saved without error. |
 | `base_currency` | `VARCHAR(3)` | no, default `'USD'` | ISO 4217. Display default only; never overrides an amount's own currency column |
@@ -31,7 +31,7 @@ One row per uploaded file. `user_id` present per `UserOwned` (RLS-ready).
 | `broker` | `VARCHAR(32)` | no | `'topstep'` today |
 | `filename` | `VARCHAR(255)` | no | as uploaded |
 | `file_sha256` | `VARCHAR(64)` | no | informational only, not a dedupe key |
-| `raw_file` | `BYTEA` | no | uploaded bytes verbatim, so a bad row-split/encoding guess is recoverable. **Size-capped per code review** at `MAX_RAW_FILE_BYTES = 10 MiB` (ADR-0003 assumes "tens of KB"; 10 MiB is a generous sanity/abuse guard, not a tight limit). Enforced two ways: `models.BinaryField(max_length=MAX_RAW_FILE_BYTES)` — Django's built-in `MaxLengthValidator`, appended automatically by `BinaryField` when `max_length` is set, runs on `full_clean()` — and a DB `CHECK (octet_length(raw_file) <= 10485760)` — `importbatch_raw_file_size_limit` — as the backstop for writes that skip `full_clean()` (e.g. a plain `.create()`). **Simplified in round-4 code review**: originally a hand-written `validate_raw_file_size` validator function, which duplicated exactly what `max_length=` already gives for free; dropped in favor of the built-in. The DB constraint uses `RawSQL`, so Django's `models.W045` check (silenced in `config/settings.py`) correctly notes it isn't pre-validated by `full_clean()` itself; the field's `max_length` validator covers that path instead. |
+| `raw_file` | `BYTEA` | no | uploaded bytes verbatim, so a bad row-split/encoding guess is recoverable. **Size-capped per code review** at `MAX_RAW_FILE_BYTES = 10 MiB` (ADR-0003 assumes "tens of KB"; 10 MiB is a generous sanity/abuse guard, not a tight limit). Enforced two ways: `models.BinaryField(max_length=MAX_RAW_FILE_BYTES)` — Django's built-in `MaxLengthValidator`, appended automatically by `BinaryField` when `max_length` is set, runs on `full_clean()` — and a DB `CHECK (length(raw_file) <= 10485760)` — `importbatch_raw_file_size_limit` — as the backstop for writes that skip `full_clean()` (e.g. a plain `.create()`). **Simplified in round-4 code review**: originally a hand-written `validate_raw_file_size` validator function, which duplicated exactly what `max_length=` already gives for free; dropped in favor of the built-in. **Root-cause fixed in round-8 code review**: the DB constraint originally used `RawSQL("octet_length(raw_file) <= %s", ...)`, which Django's checker can't introspect, hence a `models.W045` warning silenced in `config/settings.py`. Replaced with `LessThanOrEqual(Length("raw_file"), MAX_RAW_FILE_BYTES)` — Postgres's `length(bytea)` returns byte count, identical to `octet_length(bytea)`, but expressed as an ORM expression Django *can* verify — so `models.W045` no longer fires at all, and `SILENCED_SYSTEM_CHECKS` no longer needs it (only `auth.E003` remains). `LessThanOrEqual` (from `django.db.models.lookups`) rather than a `__lte` lookup shortcut, because `length` isn't a lookup registered on `BinaryField` by default (unlike `CharField`/`TextField`) — constructing the `Lookup` class directly avoids registering a new lookup globally for one constraint. |
 | `uploaded_at` | `TIMESTAMPTZ` | no, `auto_now_add` | |
 | `row_count`, `imported_count`, `skipped_count`, `failed_count` | `INTEGER` | no, default 0 | result summary (mvp.md story 3) |
 
@@ -47,12 +47,17 @@ Verbatim CSV rows, re-parseable. `user_id` denormalized here rather than reached
 | `import_batch_id` | `BIGINT FK → journal_importbatch` | no | `ON DELETE CASCADE` |
 | `line_number` | `INTEGER` | no | 1-based |
 | `raw` | `JSONB` | no | `{header: cell}`, strings only, no coercion. **Lossless-reparse note, round-6 code review, document-only — no importer exists yet**: `JSONB` can re-normalize numeric literals on write (precision/format drift — trailing zeros, exponent notation), which would violate CLAUDE.md's "keep raw data so parsing can be re-run" guarantee for anything numeric. Any future importer **must** serialize numeric values into this field as strings, never native Python `float`/`int`, to stay byte-for-byte lossless. Matching comment on the field in `journal/models.py`. |
-| `status` | `VARCHAR(20)` | no | `CHECK (status IN ('imported','skipped_duplicate','failed'))` — `rawimportrow_status_valid`. Matches ADR-0003's `VARCHAR(20)` (corrected upstream from an original `VARCHAR(16)` that couldn't fit its own `'skipped_duplicate'` enum value). |
+| `status` | `VARCHAR(20)` | no | `CHECK (status IN ('imported','skipped_duplicate','failed'))` — `rawimportrow_status_valid`. Matches ADR-0003's `VARCHAR(20)` (corrected upstream from an original `VARCHAR(16)` that couldn't fit its own `'skipped_duplicate'` enum value). **Round-8 code review**: the constraint's allowed-values list is derived from the same `STATUS_CHOICES` tuple the field's `choices=` uses (`[c[0] for c in _STATUS_CHOICES]`), not a second hardcoded list — the two could otherwise drift independently. This (and the equivalent fix for `Execution.side`/`source` below) required moving the `*_CHOICES` tuples to module-level constants: a model's nested `Meta` class can't see names defined in the *enclosing* model class's own body (confirmed empirically — Python's class-scope rule, not a Django quirk), only module globals, so a `CheckConstraint` inside `Meta` literally cannot reference a class attribute like `STATUS_CHOICES` directly. The model class attributes of the same name (`RawImportRow.STATUS_CHOICES`, `Execution.SIDE_CHOICES`, etc.) still exist and work exactly as before for any external reference — they just point at the module constants now. |
 | `error` | `TEXT` | no, default `''` | shown to the user, never silently dropped |
 
 Constraints: `UNIQUE (import_batch_id, line_number)`; `CHECK (status IN (...))` above — code review
 caught that `status` had `choices=` (Python-only) but no DB-level enum constraint, unlike
 `Execution.side`/`source` in the same PR. Added for parity.
+
+Index: `(user_id)` — `rawimportrow_user_idx`, added round-8 code review as a direct
+replacement for the automatic single-column FK index removed via `db_index=False` on
+`UserOwned.user` — see "Tenant isolation" below for why this table specifically needed a
+compensating index where the other three didn't.
 
 ## `journal_execution` (`UserOwned`) — source of truth
 
@@ -64,14 +69,14 @@ Immutable by convention (never `UPDATE`d; corrections delete+recreate).
 | `broker_execution_id` | `VARCHAR(128)` | yes | `NULL` for manual entry. The dedupe `UniqueConstraint` below (`execution_broker_dedupe`) exempts both `NULL` **and** empty string — see that constraint's note |
 | `broker_account_label` | `VARCHAR(64)` | no, default `''` | verbatim from export; no account table yet |
 | `symbol` | `VARCHAR(32)` | no | uppercased, as broker wrote it |
-| `side` | `VARCHAR(4)` | no | `CHECK (side IN ('buy','sell'))` |
+| `side` | `VARCHAR(4)` | no | `CHECK (side IN ('buy','sell'))`. Derived from `SIDE_CHOICES` the same way as `status` above (round-8 code review) — see that note |
 | `quantity` | `NUMERIC(20,10)` | no | `CHECK (quantity > 0)`. Always positive; direction lives in `side` |
 | `price` | `NUMERIC(20,10)` | no | No non-negative `CHECK`. **Removed round-6 code review** (was `CHECK (price >= 0)` — `execution_price_nonnegative`): futures have traded/settled negative in real markets (WTI crude, CL, settled around -$37.63 on 2020-04-20), and this app targets futures brokers (Topstep). `quantity > 0` below is still correct and unaffected — direction lives in `side`, not price's sign. `CHECK (price <> 0)` — `execution_price_not_zero`, **added round-7 code review**: that same negative-price evidence doesn't extend to `price = 0` — $0 is essentially never a valid fill price and is almost certainly malformed data, unlike a real negative settlement |
 | `contract_multiplier` | `NUMERIC(20,10)` | no, default 1 | point value per contract, stored per fill so a contract-spec change never rewrites old P&L. `CHECK (contract_multiplier > 0)` — `execution_contract_multiplier_positive`, added round-3 code review: it's the P&L multiplier, so 0 or negative would silently corrupt every derived trade, and `quantity`/`price` in the same constraints list already had this protection while this column didn't |
 | `fees` | `NUMERIC(19,4)` | no, default 0 | total cost of this fill |
 | `currency` | `VARCHAR(3)` | no | ISO 4217, applies to `fees` and derived P&L. `CHECK (currency <> '')` — `execution_currency_not_blank`, added round-5 code review: unlike `quantity`/`price`/`contract_multiplier` in the same constraints list, `currency` had no non-empty guard at all (no `CheckConstraint`, no `full_clean()` call site on this write path), so a money-bearing execution could be saved with `currency=""`, silently violating CLAUDE.md's "store currency with every amount" |
 | `executed_at` | `TIMESTAMPTZ` | no | UTC in DB, rendered in `user.timezone` |
-| `source` | `VARCHAR(8)` | no | `CHECK (source IN ('manual','import'))` |
+| `source` | `VARCHAR(8)` | no | `CHECK (source IN ('manual','import'))`. Derived from `SOURCE_CHOICES` the same way as `status` above (round-8 code review) — see that note |
 | `raw_import_row_id` | `BIGINT FK → journal_rawimportrow` | yes | `ON DELETE SET NULL`; `NULL` for manual |
 | `created_at` | `TIMESTAMPTZ` | no, `auto_now_add` | |
 
@@ -108,7 +113,7 @@ One per trade, keyed by the execution that opened it.
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
-| `opening_execution_id` | `BIGINT FK → journal_execution`, `UNIQUE` | no | `ON DELETE RESTRICT` (not `CASCADE`). `OneToOneField` — this *is* the trade id. **Changed in code review**: `CASCADE` let a trade correction (delete-old-execution + insert-new-execution, per ADR-0003 §4) silently destroy the note + `rules_followed` flag with no recovery. `RESTRICT` raises `RestrictedError` on a standalone `execution.delete()` while a `JournalEntry` still points at it, forcing the correction code to explicitly re-point (`UPDATE opening_execution_id`) or deliberately delete the entry first. `PROTECT` was considered and rejected: it raises unconditionally, which would also block full account deletion (ADR-0003's "one statement" guarantee) — `RESTRICT` specifically allows deletion when the protecting row is being deleted in the same cascade (verified: `user.delete()` still removes the execution and its journal entry together in one call). |
+| `opening_execution_id` | `BIGINT FK → journal_execution`, `UNIQUE` | no | `ON DELETE RESTRICT` (not `CASCADE`). `OneToOneField` — this *is* the trade id. **Changed in code review**: `CASCADE` let a trade correction (delete-old-execution + insert-new-execution, per ADR-0003 §4) silently destroy the note + `rules_followed` flag with no recovery. `RESTRICT` raises `RestrictedError` on a standalone `execution.delete()` while a `JournalEntry` still points at it, forcing the correction code to explicitly re-point (`UPDATE opening_execution_id`) or deliberately delete the entry first. `PROTECT` was considered and rejected: it raises unconditionally, which would also block full account deletion (ADR-0003's "one statement" guarantee) — `RESTRICT` specifically allows deletion when the protecting row is being deleted in the same cascade (verified: `user.delete()` still removes the execution and its journal entry together in one call). **Test gap closed round-8**: until then, no test exercised a *standalone* `execution.delete()` while a `JournalEntry` still references it — the only delete test covered the `user.delete()` cascade path, where `RESTRICT` never actually fires (it's the same operation deleting both rows together). `test_standalone_execution_delete_is_restricted_by_journal_entry` covers the other path directly: `execution.delete()` on its own raises `RestrictedError`, and neither row is touched. |
 | `note` | `TEXT` | no, default `''` | optional reasoning |
 | `rules_followed` | `BOOLEAN` | yes, no default | `NULL` = not yet answered. "Journaled" ≡ `rules_followed IS NOT NULL` |
 | `stop_price` | `NUMERIC(20,10)` | yes | R-multiple input |
@@ -147,6 +152,24 @@ Every table above except `accounts_user` inherits `journal.models.UserOwned`: a 
 `user_id BIGINT NOT NULL FK → accounts_user ON DELETE CASCADE`, plus
 `UserScopedManager.for_user(user)` as the one query chokepoint. `ON DELETE CASCADE` on every
 FK to `user` means account deletion is one `DELETE FROM accounts_user WHERE id = ?`.
+
+**`user` is `db_index=False` — round-8 code review.** A plain `ForeignKey` gets Django's
+automatic single-column index by default; that's redundant on three of the four models,
+which each already have an explicit composite index leading with `user`
+(`execution_user_symbol_ts_idx`, `importbatch_user_uploaded_idx`,
+`journalentry_user_flag_idx` — a leading-column btree already serves a plain `user_id = ?`
+lookup just as well as a dedicated single-column index would). **`RawImportRow` is the
+exception**: it has no composite index leading with `user` (its only other index is the
+`(import_batch, line_number)` unique constraint, which doesn't help a plain `user_id`
+filter) — ADR-0003's own index list never specified one here either, so it was silently
+relying on the automatic FK index alone. Blindly applying `db_index=False` to the shared
+abstract field would have left this one table with *no* index on `user_id` at all, a real
+regression the round's premise didn't account for — caught by checking, not assumed.
+Compensated with an explicit `models.Index(fields=["user"], name="rawimportrow_user_idx")`
+on `RawImportRow` specifically. Verified with `EXPLAIN` on all four tables (`WHERE user_id
+= ?`): every one uses an index scan, none fall back to a sequential scan —
+`execution_user_ts_desc_idx`, `importbatch_user_uploaded_idx`, `journalentry_user_flag_idx`,
+and the new `rawimportrow_user_idx` respectively.
 
 **Hardened per code review** (isolation was previously opt-in — nothing stopped a call site
 from using the unscoped default manager and leaking cross-user data): `UserScopedManager`'s
@@ -389,21 +412,30 @@ Verified in `journal/tests.py`:
   instance raises with zero SQL queries.
 - `test_execution_contract_multiplier_must_be_positive` asserts `IntegrityError` on
   `contract_multiplier=0`.
+- `test_standalone_execution_delete_is_restricted_by_journal_entry` (round-8) creates a
+  `JournalEntry` referencing an `Execution`, calls `execution.delete()` directly (not via
+  `user.delete()`), and asserts `RestrictedError` — the delete-path test gap this round
+  found: the existing cascade test never actually exercises `RESTRICT` firing.
 
-`accounts/tests.py` (round-7 additions): `test_get_or_create_rejects_invalid_timezone` and
-`test_update_or_create_rejects_invalid_timezone_on_create_path`/`..._on_update_path` cover the
-`get_or_create`/`update_or_create` `full_clean()` bypass on both the create and update-existing
-paths; `test_get_or_create_returns_existing_user_without_recreating` is the sanity companion
-(valid input still works); `test_get_by_natural_key_case_folding_is_db_side_not_python`
+`accounts/tests.py`: `test_get_by_natural_key_case_folding_is_db_side_not_python` (round-7)
 constructs a user with a non-ASCII local part (bypassing `full_clean()`, same pattern as
 `test_email_uniqueness_is_case_insensitive_at_db_level`) and asserts `get_by_natural_key`
 still finds it with the exact stored email.
+`test_get_or_create_and_update_or_create_are_not_supported` (round-8, replaces four
+round-7 tests that exercised the since-removed hand-rolled implementation — see the
+`email` column note above) asserts both raise `NotImplementedError` and that nothing is
+created.
 
 `config/tests.py` (new, round-5) covers `SECRET_KEY`'s fail-closed logic — necessarily via
 subprocess, since it's import-time settings behavior that can't be re-exercised once a test
 process has already imported settings once: `test_secret_key_required_when_debug_false_and_unset`,
 `test_secret_key_falls_back_to_dev_default_when_debug_true`,
-`test_secret_key_from_env_used_when_debug_false`.
+`test_secret_key_from_env_used_when_debug_false`, plus (round-7 addendum)
+`test_secret_key_rejects_the_env_example_placeholder_when_debug_false` /
+`test_secret_key_placeholder_falls_back_to_dev_default_when_debug_true`, plus (round-8)
+`test_secret_key_rejects_django_insecure_prefix_when_debug_false` /
+`test_secret_key_django_insecure_prefix_falls_back_to_dev_default_when_debug_true` /
+`test_secret_key_real_value_not_starting_with_django_insecure_still_boots`.
 
 ### Migration history
 
@@ -440,6 +472,16 @@ migration each; round-7's constraint is simply already inside `0001_initial.py`,
 file. Verified the same way as every prior squash: fresh `migrate` from zero, `makemigrations
 --check --dry-run` clean, full test suite passing (37/37), `psql \d journal_execution`
 confirms `execution_price_not_zero` present.
+
+Round-8 did the same fold again: `execution_price_not_zero`'s removal of `db_index=True` on
+`user`, the new `rawimportrow_user_idx`, and the `Length()`-based `raw_file` constraint all
+landed inside the same `0001_initial.py`, no new migration file, same reset-and-regenerate
+mechanism. Verified identically: fresh `migrate` from zero, `makemigrations --check
+--dry-run` clean, full test suite passing (38/38), `psql \d` on all four `journal_*` tables
+confirms the final shape — notably `importbatch_raw_file_size_limit` now reads
+`CHECK (length(raw_file) <= 10485760)` (was `octet_length(...)` via `RawSQL`), and `EXPLAIN`
+on a plain `WHERE user_id = ?` against all four tables shows an index scan, not a
+sequential scan, confirming the `db_index=False` change didn't quietly regress anything.
 
 ## Money / quantity / time — confirmed as built
 
@@ -489,6 +531,20 @@ task's code-review fixes:
   placeholder raises `ImproperlyConfigured`, same as if it were unset; `DEBUG=True` still
   falls back to the dev default either way. Verified via subprocess in `config/tests.py`, same
   pattern as the empty-value tests.
+- **Round-8 code review**: broadened again — the one-exact-string check missed the more
+  realistic leftover-default scenario. Any value starting with `"django-insecure-"` (Django's
+  own `startproject` default-key prefix) is now rejected the same way when `DEBUG=False`;
+  someone who never touches `SECRET_KEY` at all and copies the auto-generated
+  `startproject` value into prod is more likely than someone leaving the literal
+  `CHANGE-ME` placeholder in place. Verified via subprocess in `config/tests.py`: the
+  prefix is rejected under `DEBUG=False`, still falls back under `DEBUG=True`, and a real
+  key not matching either bad pattern still boots normally.
+- Root-cause fixed, not silenced (**round-8 code review**): `models.W045` used to be in
+  `SILENCED_SYSTEM_CHECKS` because `ImportBatch.raw_file`'s size CHECK used `RawSQL`, which
+  Django's checker can't introspect. Replaced with `Length()` (see the `raw_file` column note
+  above) — an ORM expression Django *can* verify — so the warning no longer fires at all.
+  `SILENCED_SYSTEM_CHECKS` now holds only `auth.E003` (still a genuine false positive, not
+  worth a custom system check for one remaining item).
 - `UserManager._create_user()` has a known, accepted TOCTOU: two concurrent signups with the
   same email can both pass the pre-save uniqueness check before either commits. Not fixed —
   the DB `UniqueConstraint(Lower("email"))` already prevents the actual duplicate row

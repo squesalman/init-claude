@@ -45,7 +45,15 @@ DEBUG = os.environ.get('DJANGO_DEBUG', 'false').lower() == 'true'
 _ENV_EXAMPLE_PLACEHOLDER_SECRET_KEY = 'CHANGE-ME-run-get_random_secret_key'
 
 _secret_key = os.environ.get('DJANGO_SECRET_KEY')
-if not _secret_key or _secret_key == _ENV_EXAMPLE_PLACEHOLDER_SECRET_KEY:
+# Round-8 code review: broadened beyond the one exact placeholder above. Any value
+# starting with "django-insecure-" is Django's own `startproject` default-key prefix —
+# the realistic leftover-default scenario (more likely in practice than someone leaving
+# the literal CHANGE-ME placeholder from .env.example in place) — so it's rejected the
+# same way when DEBUG=False.
+_looks_like_a_leftover_default = bool(_secret_key) and _secret_key.startswith(
+    'django-insecure-'
+)
+if not _secret_key or _secret_key == _ENV_EXAMPLE_PLACEHOLDER_SECRET_KEY or _looks_like_a_leftover_default:
     if DEBUG:
         # ponytail: dev-only fallback so `runserver`/tests work with zero setup; prod
         # sets DJANGO_SECRET_KEY via the VPS .env per ADR-0002 and must not use this.
@@ -53,9 +61,10 @@ if not _secret_key or _secret_key == _ENV_EXAMPLE_PLACEHOLDER_SECRET_KEY:
     else:
         raise ImproperlyConfigured(
             'DJANGO_SECRET_KEY must be set to a real secret when DEBUG is False — it is '
-            'either unset or still the .env.example placeholder value. Refusing to start '
-            'with the public dev fallback key (or an equally public placeholder) on what '
-            'looks like a real deployment.'
+            'either unset, still a known placeholder value, or still has the '
+            '"django-insecure-" prefix Django\'s startproject generates by default. '
+            'Refusing to start with a key that is public (or looks like a forgotten '
+            'default) on what looks like a real deployment.'
         )
 SECRET_KEY = _secret_key
 
@@ -71,14 +80,15 @@ AUTH_USER_MODEL = 'accounts.User'
 # UniqueConstraint on USERNAME_FIELD, not accounts.User's expression-based
 # UniqueConstraint(Lower("email"), ...), which is a *stricter* guarantee (case-insensitive)
 # than what the check looks for. See ADR-0003 §1 ("lower(email) is an acceptable
-# substitute" for CITEXT) and accounts/models.py.
-# models.W045: journal.ImportBatch.raw_file's size-cap CHECK constraint uses RawSQL
-# (octet_length), which Django can't pre-validate in full_clean(). Expected and covered:
-# the field's own max_length= gives it Django's built-in MaxLengthValidator, which
-# handles the full_clean() path, and the DB constraint is the backstop for every other
-# write path. See journal/models.py (stale reference to a since-removed hand-written
-# validate_raw_file_size validator corrected here, round-5 code review).
-SILENCED_SYSTEM_CHECKS = ['auth.E003', 'models.W045']
+# substitute" for CITEXT) and accounts/models.py. Not worth a custom system check for
+# this one remaining item.
+#
+# models.W045 no longer needed here (round-8 code review): journal.ImportBatch.raw_file's
+# size-cap CHECK constraint used to use RawSQL("octet_length(raw_file) <= %s", ...), which
+# Django's checker couldn't introspect. Replaced with Length(raw_file) <= N — an ORM
+# expression Django CAN verify — so the warning doesn't fire at all anymore, root cause
+# fixed rather than worked around. See journal/models.py.
+SILENCED_SYSTEM_CHECKS = ['auth.E003']
 
 
 # Application definition
