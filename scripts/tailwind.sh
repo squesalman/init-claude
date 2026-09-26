@@ -5,6 +5,9 @@
 set -eu
 cd "$(dirname "$0")/.."
 VERSION=v3.4.17
+# ponytail: Linux only (downloads the linux binary, verifies with sha256sum); add a
+# macos branch when someone develops on a Mac.
+[ "$(uname -s)" = Linux ] || { echo "scripts/tailwind.sh supports Linux only (got $(uname -s))" >&2; exit 1; }
 case "$(uname -m)" in
   aarch64|arm64) ARCH=arm64; SHA=69b1378b8133192d7d2feb12a116fa12d035594f58db3eff215879e4ad8cf39b ;;
   x86_64|amd64)  ARCH=x64;   SHA=7d24f7fa191d2193b78cd5f5a42a6093e14409521908529f42d80b11fde1f1d4 ;;
