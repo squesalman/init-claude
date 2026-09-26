@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-26
-- **Deciders:** architect (proposed), user (to approve)
+- **Deciders:** architect (proposed), user (approved 2026-09-26: "fail, accepted, yes")
 - **Amends:** [ADR-0003](0003-data-model.md) §4 (dedupe index, one new column), §3 (one new
   status value), §5 (matcher grouping key)
 - **Evidence:** [`docs/domain/topstep-import.md`](../domain/topstep-import.md) §8 (real 177-row
