@@ -1,5 +1,6 @@
 all_trades_export.csv
 *.csv
+!tests/fixtures/*.csv
 .claude/worktrees/
 
 # Python / Django / uv
@@ -10,3 +11,6 @@ db.sqlite3
 staticfiles/
 .pytest_cache/
 .env
+
+# Tailwind standalone binary (scripts/tailwind.sh downloads it)
+bin/

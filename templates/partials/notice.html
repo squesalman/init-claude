@@ -1,0 +1,6 @@
+{# Notice (import-account-label.md section 6): variant info | success | attention, body, optional dismiss. No auto-dismiss, never role="alert". #}
+<div role="status" class="flex items-start gap-3 rounded border-l-4 p-3 text-text {% if variant == 'success' %}border-success bg-success-bg{% elif variant == 'attention' %}border-attention bg-attention-bg{% else %}border-info bg-info-bg{% endif %}">
+  <span class="mt-0.5 {% if variant == 'success' %}text-success{% elif variant == 'attention' %}text-attention{% else %}text-info{% endif %}">{% include "partials/icon.html" with name=variant %}</span>
+  <p class="flex-1 self-center">{{ body }}</p>
+  {% if dismiss %}<button type="button" data-dismiss class="-my-2 -mr-2 inline-flex h-11 w-11 items-center justify-center rounded text-text-muted" aria-label="Close">{% include "partials/icon.html" with name="close" %}</button>{% endif %}
+</div>

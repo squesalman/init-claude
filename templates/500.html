@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{# Django's server_error renders this without the request or context processors. #}
+{% block title %}Something went wrong{% endblock %}
+{% block width %}max-w-auth{% endblock %}
+{% block content %}
+<div class="rounded-lg border border-border bg-surface p-6">
+  <h1 class="text-title font-semibold">This page didn't load.</h1>
+  <p class="mt-2">Nothing was changed. Try again in a moment.</p>
+  <p class="mt-6"><a href="">Try again</a></p>
+</div>
+{% endblock %}

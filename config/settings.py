@@ -75,6 +75,9 @@ ALLOWED_HOSTS = [
 ]
 
 AUTH_USER_MODEL = 'accounts.User'
+LOGIN_URL = '/login/'
+LOGIN_REDIRECT_URL = '/trades/'
+LOGOUT_REDIRECT_URL = '/login/'
 
 # auth.E003 is a false positive here: it only recognizes unique=True or a plain-field
 # UniqueConstraint on USERNAME_FIELD, not accounts.User's expression-based
@@ -119,7 +122,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -184,6 +187,8 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATICFILES_DIRS = [BASE_DIR / 'static']  # static/css/app.css is built by scripts/tailwind.sh
+STATIC_ROOT = BASE_DIR / 'staticfiles'  # collectstatic target (prod image build, ADR-0002)
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

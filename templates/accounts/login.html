@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Log in{% endblock %}
+{% block width %}max-w-auth{% endblock %}
+{% block content %}
+<div class="rounded-lg border border-border bg-surface p-6">
+  {% if login_required_notice %}<div class="mb-6">{% include "partials/notice.html" with variant="info" body=login_required_notice %}</div>{% endif %}
+  <h1 class="text-title font-semibold">Log in</h1>
+  {% include "partials/error_summary.html" %}
+  <form method="post" novalidate class="mt-6 space-y-5">
+    {% csrf_token %}
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+    {# Written out: autocomplete="username", and autofocus only when there is no error (design 4.2). #}
+    {% with field=form.email %}
+    <div class="field">
+      <label for="{{ field.id_for_label }}" class="font-medium">{{ field.label }}</label>
+      <input type="text" inputmode="email" name="{{ field.html_name }}" id="{{ field.auto_id }}" value="{{ field.value|default_if_none:'' }}" required autocomplete="username" autocapitalize="none" spellcheck="false"{% if field.errors %} aria-invalid="true" aria-describedby="{{ field.auto_id }}_error"{% endif %}{% if not form.errors %} autofocus{% endif %}>
+      {% include "partials/field_errors.html" %}
+    </div>
+    {% endwith %}
+    {% include "partials/field.html" with field=form.password %}
+    <button type="submit" class="btn-primary w-full" data-busy="{{ busy_label }}">Log in</button>
+  </form>
+  <p class="mt-6">New here? <a href="{% url 'signup' %}">Create an account</a></p>
+</div>
+{% endblock %}

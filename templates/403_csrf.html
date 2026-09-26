@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{# Django's csrf_failure renders this without the request, so the nav shows its logged-out variant. #}
+{% block title %}Page expired{% endblock %}
+{% block width %}max-w-auth{% endblock %}
+{% block content %}
+<div class="rounded-lg border border-border bg-surface p-6">
+  <h1 class="text-title font-semibold">That page expired.</h1>
+  <p class="mt-2">Go back, refresh it, and try again.</p>
+  <p class="mt-6"><a href="{% url 'login' %}">Log in</a></p>
+</div>
+{% endblock %}
