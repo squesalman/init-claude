@@ -22,6 +22,7 @@ Owner: orchestrator. Living doc. Last updated 2026-09-26. Source of truth for *w
 ## Remaining work (one branch + worktree + PR per code task, TDD, tests stay in repo)
 Merge order:
 1. **PR A, auth:** signup (with time zone + confirm password), login, logout, base template/nav, `UserScopedModelForm` and the banned-pattern test (ADR-0006). Add `!tests/fixtures/*.csv` to `.gitignore` (follow-ups 7). Owners: `backend-engineer`, then `frontend-engineer`.
+1b. **PR A2, lint (after PR A merges; user ruling 2026-09-26):** add `ruff` to the `dev` group in `pyproject.toml`, `[tool.ruff]` config (Python 3.12, line length 100, rules `E,F,I,B,UP,DJ,S`, tests exempt from `S`, migrations excluded), lint only (no `ruff format` yet), fix or ignore findings, document `uv run ruff check .` in `README.md` and `CLAUDE.md`. No system install; uv puts it in the project `.venv`. Owner: `backend-engineer`.
 2. **PR B, importer + matcher + stats (backend only):** Topstep parser (idempotent, keeps raw rows, ADR-0004 pairing), `derive_trades()`, win rate / total P&L / avg R. Query-budget test from ADR-0006. Test vectors from `docs/domain/`.
 3. **PR C, import UI:** upload form with Account field, `/imports/` list + detail, delete with counted tick box (ADR-0005; its 7 tests first).
 4. **PR D, `/trades/` list + 3 stat cards.**
