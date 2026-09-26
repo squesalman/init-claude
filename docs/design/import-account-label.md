@@ -561,7 +561,7 @@ For `backend-engineer`:
 - **E.** Is a whole import one transaction, so "nothing was saved" on upload failure is true? Confirm before the frontend ships that wording.
 - **F.** Confirm the detail page can compute on read: same hash, earlier batch, and its label (from executions). Also the reverse for the dialog's "original-batch line": later batches with the same hash that imported nothing.
 - **G.** htmx partial swap of `AccountField` on a server validation error, so the file input stays selected.
-- **H.** Detail page and list show the label from executions. A batch that imported no executions has no recoverable label, so the design shows "not recorded (nothing was imported)". Accept, or store the label on `ImportBatch` (a schema change, not proposed here)?
+- **H. RESOLVED (user, 2026-09-26: H1).** Accept "not recorded (nothing was imported)" for a batch that imported no executions. No `ImportBatch` label column; no schema change.
 
 For the orchestrator or user:
 - **I.** The journal list caps at 20 rows before "Show all". Fine, or show everything always? (Cheap either way.)
