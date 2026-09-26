@@ -9,6 +9,8 @@ from django.db import models
 from django.db.models.functions import Length
 from django.db.models.lookups import LessThanOrEqual
 
+from accounts.models import CURRENCY_CODE_REGEX, validate_currency_code
+
 # ADR-0003 assumes Topstep exports are "tens of KB." 10 MB is a generous cap (roughly
 # 100-1000x that) — a sanity/abuse guard against a malformed or hostile upload, not a
 # tight limit expected to bind on legitimate files.
@@ -44,49 +46,16 @@ class UserScopedManager(models.Manager):
     """
     The one chokepoint every read must go through (ADR-0002/0003, CLAUDE.md).
 
-    Hardened per code review: the default queryset is deliberately unusable, so a call
-    site has to opt OUT of scoping (via `Model.unscoped`) rather than opt into it. A
-    forgotten `.for_user()` now fails loudly (RuntimeError) instead of silently returning
-    every user's rows. `.create()`, `.get_or_create()`, and `.update_or_create()` are the
-    exceptions — `.create()` can't leak (the `user` FK is NOT NULL and always passed
-    explicitly as a kwarg), and blocking it would break the ordinary
-    `Model.objects.create(user=..., ...)` idiom used throughout the app and its tests.
+    The default queryset is deliberately unusable, so a call site has to opt OUT of
+    scoping (via `Model.unscoped`) rather than opt into it. A forgotten `.for_user()`
+    fails loudly (RuntimeError) instead of silently returning every user's rows.
+    `.create()` is the exception: it can't leak (the `user` FK is NOT NULL and always
+    passed explicitly), and blocking it would break the ordinary
+    `Model.objects.create(user=..., ...)` idiom.
 
-    `get_or_create()`/`update_or_create()` need more than that exemption, though — this
-    took three rounds of code review to get actually right:
-
-    - **Round 6**: their *lookup* kwargs, not just `defaults`, determine which existing
-      row (if any) gets returned, and `defaults` is only applied on create. Confirmed
-      live: `Execution.objects.get_or_create(broker="topstep",
-      broker_execution_id="SHARED1", defaults=dict(user=user_b, ...))` — `user` only in
-      `defaults`, not the lookup — returned user_a's existing matching row with
-      `created=False`, handing user_b user_a's execution. Fixed (at the time) by
-      requiring `user=` in the top-level lookup kwargs, plus an after-the-fact assert on
-      the returned row.
-    - **Round 7, addendum**: that "require + check after" fix was still insufficient.
-      Confirmed live: `Execution.objects.get_or_create(user=user_a, broker="topstep",
-      broker_execution_id="X1", defaults=dict(user=user_b, ...))`, with *no* existing
-      match — Django's own `get_or_create()` lets `defaults["user"]` override the
-      lookup kwargs' `user` when building the row to create, so it **commits** with
-      `user_id=user_b.pk` inside Django's own transaction, and only *then* does the
-      after-the-fact check run and raise. Too late — confirmed the leaked row existed
-      via `Execution.unscoped.filter(...)` even though the call raised. Fixed by
-      validating **before** calling `super().get_queryset().get_or_create()`/
-      `update_or_create()` at all: if `defaults` (or `create_defaults`) contains
-      `"user"`/`"user_id"`, it must match the lookup kwargs' value exactly, or this
-      raises `ValueError` immediately and Django's own get_or_create machinery never
-      runs — nothing commits. `defaults` omitting `user`/`user_id` entirely is fine (it
-      just inherits from the lookup params, which was already safe).
-    - Also **round 7** (not the leak, a usability bug in round 6's own fix): the
-      lookup-kwarg requirement originally only accepted the literal key `"user"`,
-      incorrectly rejecting the equally valid `user_id=` shape — failed closed (no
-      leak), but blocked a legitimate call. Both methods now accept `user=` or
-      `user_id=` throughout.
-
-    The after-the-fact `_assert_belongs_to_user` check (round 6) is kept as a second,
-    redundant layer on top of the pre-check — cheap, and it's the thing that would catch
-    any *other* way `defaults` could end up producing a mismatched row that nobody has
-    found yet.
+    `get_or_create()`/`update_or_create()` are intentionally NOT overridden: they hit
+    the raising `get_queryset()` and so fail closed. The importer will define its exact
+    upsert (idempotent on user + broker + broker_execution_id) when it is written.
     """
 
     def get_queryset(self):
@@ -101,74 +70,6 @@ class UserScopedManager(models.Manager):
 
     def create(self, **kwargs):
         return super().get_queryset().create(**kwargs)
-
-    def get_or_create(self, defaults=None, **kwargs):
-        self._require_user_in_lookup_kwargs("get_or_create", kwargs)
-        self._require_defaults_user_consistent("get_or_create", kwargs, defaults)
-        obj, created = super().get_queryset().get_or_create(defaults=defaults, **kwargs)
-        self._assert_belongs_to_user(obj, kwargs.get("user", kwargs.get("user_id")))
-        return obj, created
-
-    def update_or_create(self, defaults=None, create_defaults=None, **kwargs):
-        self._require_user_in_lookup_kwargs("update_or_create", kwargs)
-        self._require_defaults_user_consistent("update_or_create", kwargs, defaults)
-        self._require_defaults_user_consistent("update_or_create", kwargs, create_defaults)
-        # create_defaults is Django 5.0+; kwargs shape is identical to get_or_create's
-        # otherwise, so no separate comment needed beyond the class docstring above.
-        obj, created = super().get_queryset().update_or_create(
-            defaults=defaults, create_defaults=create_defaults, **kwargs
-        )
-        self._assert_belongs_to_user(obj, kwargs.get("user", kwargs.get("user_id")))
-        return obj, created
-
-    @staticmethod
-    def _require_user_in_lookup_kwargs(method_name, kwargs):
-        # Accepts either `user=` or `user_id=` (round-7 code review: the original only
-        # checked the literal key "user", incorrectly rejecting the equally valid
-        # `user_id=` lookup kwarg — failed closed, so no leak, but blocked a legitimate
-        # call shape).
-        if "user" not in kwargs and "user_id" not in kwargs:
-            raise ValueError(
-                f"{method_name}() on a UserOwned model requires `user=` or `user_id=` "
-                "in the top-level lookup kwargs, not only inside `defaults=` — "
-                "otherwise the lookup can match (and return) another user's row before "
-                "`defaults` is ever applied. See UserScopedManager's docstring."
-            )
-
-    @staticmethod
-    def _require_defaults_user_consistent(method_name, kwargs, defaults):
-        # Round-7 addendum: the real fix for the leak. `defaults` (or `create_defaults`)
-        # is allowed to omit user/user_id entirely — it then just inherits the lookup
-        # kwargs' value, which is safe. But if it *does* specify one, it must agree with
-        # the lookup kwargs, checked BEFORE calling Django's own get_or_create/
-        # update_or_create — because Django lets defaults override the lookup value when
-        # building the row to create, so a conflicting defaults["user"] would otherwise
-        # commit a cross-tenant row before any after-the-fact check ever runs.
-        if not defaults:
-            return
-        lookup_value = kwargs.get("user", kwargs.get("user_id"))
-        lookup_user_id = getattr(lookup_value, "pk", lookup_value)
-        for key in ("user", "user_id"):
-            if key not in defaults:
-                continue
-            defaults_user_id = getattr(defaults[key], "pk", defaults[key])
-            if defaults_user_id != lookup_user_id:
-                raise ValueError(
-                    f"{method_name}(): defaults[{key!r}]={defaults_user_id!r} conflicts "
-                    f"with the lookup kwargs' user ({lookup_user_id!r}). Refusing before "
-                    "calling Django's own get_or_create()/update_or_create(), since "
-                    "defaults can override the lookup value when creating a new row — "
-                    "checking only after the call would be too late."
-                )
-
-    @staticmethod
-    def _assert_belongs_to_user(obj, user):
-        user_id = getattr(user, "pk", user)
-        if obj.user_id != user_id:
-            raise CrossTenantForeignKeyError(
-                f"{type(obj).__name__} (pk={obj.pk}) belongs to user_id={obj.user_id}, "
-                f"not the requested user_id={user_id}."
-            )
 
 
 class CrossTenantForeignKeyError(ValueError):
@@ -247,20 +148,20 @@ class UserOwned(models.Model):
         # out of kwargs and forwarding *args/**kwargs unchanged avoids the collision
         # entirely — this override never needs to pass update_fields on, only inspect it.
         update_fields = kwargs.get("update_fields")
-        # Perf fix per code review: only re-run the (one SELECT per guarded FK)
-        # cross-tenant check when it could actually matter — a full save/create, or an
-        # update_fields save that actually touches one of the guarded FK fields. A
-        # plain-field update (e.g. `entry.save(update_fields=["note"])`) skips it
-        # entirely; the FK columns aren't changing, so there's nothing new to verify.
+        # Perf: only re-run the (one SELECT per guarded FK) cross-tenant check when it
+        # could matter — a full save/create, or an update_fields save touching a guarded
+        # FK or the owner. A plain-field update (e.g. `save(update_fields=["note"])`)
+        # skips it: nothing relevant is changing. Django's update_fields accepts either
+        # a field name or its attname, so both are matched.
         if update_fields is None:
             self._check_cross_tenant_fks()
         else:
             touched = set(update_fields)
-            # Match both the field name (e.g. "opening_execution") and its attname
-            # (e.g. "opening_execution_id") — Django's update_fields accepts either
-            # for a FK (round-5 code review: matching only field.name meant
-            # save(update_fields=["opening_execution_id"]) skipped the check entirely).
-            if any(
+            owner = self._meta.get_field("user")
+            # Writing the owner changes what EVERY guarded FK must match, including FKs
+            # not listed in update_fields (their columns stay, the owner moves), so an
+            # owner write re-checks all of them.
+            if owner.name in touched or owner.attname in touched or any(
                 f.name in touched or f.attname in touched
                 for f in self._guarded_fk_fields()
             ):
@@ -467,7 +368,7 @@ class Execution(UserOwned):
     # VARCHAR(3), not ADR-0003's literal CHAR(3) — see docs/data/schema.md "Money /
     # quantity / time" for why (Django has no native fixed-length char field; Postgres's
     # own docs discourage CHAR(n) generally). Deviation documented, not silent.
-    currency = models.CharField(max_length=3)
+    currency = models.CharField(max_length=3, validators=[validate_currency_code])
     executed_at = models.DateTimeField()
     source = models.CharField(max_length=8, choices=SOURCE_CHOICES)
     raw_import_row = models.ForeignKey(
@@ -534,6 +435,24 @@ class Execution(UserOwned):
             models.CheckConstraint(
                 condition=~models.Q(currency=""), name="execution_currency_not_blank"
             ),
+            # Strict ISO 4217 shape ("usd"/"us" rejected); pairs with the field validator.
+            models.CheckConstraint(
+                condition=models.Q(currency__regex=CURRENCY_CODE_REGEX),
+                name="execution_currency_iso_format",
+            ),
+            # An import row with a NULL/blank broker_execution_id is exempt from the
+            # partial unique index above and would never dedupe, so imports must carry a
+            # real id. Manual entries stay free to leave it NULL.
+            models.CheckConstraint(
+                condition=(
+                    ~models.Q(source=_SOURCE_IMPORT)
+                    | (
+                        models.Q(broker_execution_id__isnull=False)
+                        & ~models.Q(broker_execution_id="")
+                    )
+                ),
+                name="execution_import_requires_broker_execution_id",
+            ),
         ]
         indexes = [
             # The matcher's read pattern: a user's fills for one symbol, in time order.
@@ -573,7 +492,9 @@ class JournalEntry(UserOwned):
     stop_price = models.DecimalField(max_digits=20, decimal_places=10, null=True, blank=True)
     planned_risk_amount = models.DecimalField(max_digits=19, decimal_places=4, null=True, blank=True)
     # VARCHAR(3), not CHAR(3) — see the comment on Execution.currency above.
-    risk_currency = models.CharField(max_length=3, null=True, blank=True)
+    risk_currency = models.CharField(
+        max_length=3, null=True, blank=True, validators=[validate_currency_code]
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -593,6 +514,13 @@ class JournalEntry(UserOwned):
                     )
                 ),
                 name="journalentry_risk_currency_required_with_amount",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(risk_currency__isnull=True)
+                    | models.Q(risk_currency__regex=CURRENCY_CODE_REGEX)
+                ),
+                name="journalentry_risk_currency_iso_format",
             ),
         ]
         indexes = [

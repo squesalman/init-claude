@@ -137,3 +137,19 @@ def test_get_by_natural_key_case_folding_is_db_side_not_python():
 
     found = User.objects.get_by_natural_key(email)
     assert found.pk == user.pk
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("bad", ["usd", "us"])
+def test_base_currency_must_be_three_uppercase_letters(bad):
+    """Round-9: validator (full_clean path via create_user) plus DB CHECK backstop."""
+    from django.core.exceptions import ValidationError
+    from django.db import IntegrityError, transaction
+
+    with pytest.raises(ValidationError):
+        User.objects.create_user(email="cur1@example.com", password="x", base_currency=bad)
+
+    user = User.objects.create_user(email="cur2@example.com", password="x")
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            User.objects.filter(pk=user.pk).update(base_currency=bad)

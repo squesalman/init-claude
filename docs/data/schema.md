@@ -176,49 +176,15 @@ from using the unscoped default manager and leaking cross-user data): `UserScope
 `get_queryset()` now raises `RuntimeError` unconditionally, so `Model.objects.all()`,
 `.filter()`, `.get()`, etc. all fail loudly instead of silently returning every user's rows.
 `.for_user(user)` bypasses the raise (it calls `super().get_queryset()` directly) and remains
-the one sanctioned read path. `.create()`, `.get_or_create()`, and `.update_or_create()` are
-separately exempted on the manager. `.create()` is unconditionally safe — it isn't a read and
-can't leak (the `user` FK is `NOT NULL` and always passed explicitly as a kwarg), so blocking
-it would break the ordinary `Model.objects.create(user=..., ...)` idiom.
+the one sanctioned read path. `.create()` is the only other exemption: it isn't a read and
+can't leak (the `user` FK is `NOT NULL` and always passed explicitly), so blocking it would
+break the ordinary `Model.objects.create(user=..., ...)` idiom.
 
-`get_or_create`/`update_or_create` are **not** unconditionally safe, and took four rounds to
-get right — the leak vector kept moving:
-
-- **Round-5**: missed in the original hardening — they proxied through the raising
-  `get_queryset()`, contradicting the manager's own docstring claim that `.create()` was the
-  one exception, and directly blocked the idempotent-import pattern CLAUDE.md requires
-  ("dedupe by broker + execution id"). Bypassed the same way as `.create()`.
-- **Round-6**: that bypass reintroduced a cross-tenant leak. `get_or_create`'s *lookup* kwargs
-  (not `defaults`) decide which existing row gets returned — `defaults` only applies on
-  create. Confirmed live: `Execution.objects.get_or_create(broker="topstep",
-  broker_execution_id="SHARED1", defaults=dict(user=user_b, ...))`, with `user` only in
-  `defaults`, returned user_a's existing matching row with `created=False`, handing user_b
-  user_a's execution — no `save()` ever ran on that path, so `UserOwned.save()`'s
-  cross-tenant FK guard never fired. Fixed (at the time) by requiring `user=` in the
-  top-level lookup kwargs, plus an after-the-fact assert on the returned row.
-- **Round-7 addendum**: that "require + check after" fix was still insufficient — confirmed
-  live with a variant that has no existing match at all:
-  `Execution.objects.get_or_create(user=user_a, broker="topstep",
-  broker_execution_id="X1", defaults=dict(user=user_b, ...))`. Django's own `get_or_create()`
-  lets `defaults["user"]` override the lookup kwargs' `user` when building the row to
-  create, so it **commits** with `user_id=user_b.pk` inside Django's own transaction, and
-  only *then* does the after-the-fact check run and raise — too late; confirmed the leaked
-  row existed via `Execution.unscoped.filter(...)` even though the call raised. **Fixed by
-  validating before calling Django's own `get_or_create()`/`update_or_create()` at all**: if
-  `defaults` (or `create_defaults`) specifies `user`/`user_id`, it must match the lookup
-  kwargs' value exactly, or this raises `ValueError` immediately and nothing commits.
-  `defaults` omitting `user`/`user_id` entirely remains fine — it just inherits the lookup
-  value, which was already safe. The after-the-fact assert is kept as a second, redundant
-  layer on top.
-- **Round-7** (a usability bug in round 6's own fix, not the leak): the lookup-kwarg
-  requirement originally only accepted the literal key `"user"`, incorrectly rejecting the
-  equally valid `user_id=` shape — failed closed (no leak), but blocked a legitimate call.
-  Both methods now accept `user=` or `user_id=` throughout, including in the
-  `defaults`-consistency check above.
-
-The natural, now-safe importer call:
-`Execution.objects.get_or_create(user=..., broker=..., broker_execution_id=...,
-defaults={...})`.
+`get_or_create()`/`update_or_create()` are **not** overridden and fail closed
+(`RuntimeError` from the raising `get_queryset()`). Hand-rolled versions leaked cross-tenant
+rows through `defaults=` across three review rounds and were removed (round 9); the Topstep
+importer will define its exact upsert, idempotent on `(user, broker, broker_execution_id)`,
+when it is written.
 
 Each `UserOwned` subclass also gets a second manager, `unscoped` (a plain
 `models.Manager()`). `Meta.base_manager_name = "unscoped"` and `Meta.default_manager_name =
@@ -381,20 +347,15 @@ Verified in `journal/tests.py`:
 - `test_save_accepts_django_real_positional_signature` calls
   `entry.save(False, False, None, ["note"])` — Django's real, deprecated-but-still-valid
   positional `save()` signature — and asserts it doesn't raise `TypeError`.
-- `test_get_or_create_and_update_or_create_work_on_default_manager` exercises the exact
-  idempotent-import shape CLAUDE.md requires directly on `Model.objects`.
-- `test_get_or_create_with_user_only_in_defaults_is_rejected` (round-6) reproduces the exact
-  live leak — `user` only in `defaults`, not the lookup kwargs — and asserts `ValueError`
-  now, plus that user_a's row is untouched and nothing was created for user_b.
-- `test_get_or_create_with_conflicting_defaults_user_does_not_commit` (round-7 addendum)
-  reproduces the *second* live leak — `user` in both the lookup kwargs and a conflicting
-  `defaults`, no existing match — and asserts `ValueError` plus that no row was committed
-  at all, not even briefly.
-- `test_get_or_create_defaults_user_matching_lookup_is_fine` (round-7 addendum) is the
-  companion negative case: `defaults` specifying the *same* user as the lookup must keep
-  working.
-- `test_get_or_create_accepts_user_id_lookup_kwarg` (round-7) asserts `user_id=` works as
-  a lookup kwarg, not just `user=`.
+- `test_get_or_create_is_not_offered_on_the_scoped_manager` (round-9) asserts both methods
+  raise `RuntimeError` on `Model.objects`.
+- `test_owner_only_update_fields_save_still_checks_all_guarded_fks` (round-9) asserts
+  `save(update_fields=["user"])` / `["user_id"]` re-checks every guarded FK (JournalEntry,
+  RawImportRow, Execution) — an owner write moves what all FKs must match.
+- `test_import_execution_requires_broker_execution_id` (round-9): `source='import'` with a
+  NULL/blank id is rejected by `execution_import_requires_broker_execution_id`.
+- Currency format tests (round-9): `usd`/`us`/`U1D`/`` rejected on `Execution.currency`,
+  `JournalEntry.risk_currency`, `User.base_currency` (DB CHECK and field validator).
 - `test_cross_tenant_check_skipped_when_user_id_is_none_lets_real_not_null_surface`
   (round-7) asserts a `JournalEntry` saved with no `user` raises a plain `IntegrityError`
   naming `user_id`, not a misleading `CrossTenantForeignKeyError`.
@@ -562,3 +523,16 @@ task's code-review fixes:
 - No admin registration, views, forms, or API — explicitly out of scope for this task. See
   the "Admin known gap" note under Tenant isolation above for what registering a `UserOwned`
   model will require.
+
+
+## Round-9 additions (migrations `journal/0002`, `accounts/0002`)
+
+- Every currency column has `CHECK (col ~ '^[A-Z]{3}$')` (`execution_currency_iso_format`,
+  `journalentry_risk_currency_iso_format`, `accounts_user_base_currency_iso_format`) plus a
+  `RegexValidator` (`accounts.models.validate_currency_code`) for the `full_clean()` path.
+- `execution_import_requires_broker_execution_id`: `CHECK (source <> 'import' OR
+  (broker_execution_id IS NOT NULL AND broker_execution_id <> ''))`. Closes the hole where
+  the partial unique index `execution_broker_dedupe` exempted blank ids, so an import row
+  without one was never deduped.
+- Rollback: `migrate journal 0001` and `migrate accounts 0001` (constraints and validators
+  only; no data rewrite). Verified up/down/up on the dev DB.

@@ -3,6 +3,7 @@ from zoneinfo import available_timezones
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import PermissionsMixin
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import Value
 from django.db.models.functions import Lower
@@ -13,6 +14,15 @@ from django.db.models.functions import Lower
 # never changes in-process — lru_cache is for values that vary by argument or need
 # invalidating; there's neither here.
 _AVAILABLE_TIMEZONES = frozenset(available_timezones())
+
+
+# ISO 4217 alphabetic code shape: exactly three uppercase ASCII letters. Shared by every
+# currency column in the project — each pairs `validate_currency_code` (full_clean path)
+# with a DB CheckConstraint on `currency__regex=CURRENCY_CODE_REGEX` (plain .save() path).
+CURRENCY_CODE_REGEX = r"^[A-Z]{3}$"
+validate_currency_code = RegexValidator(
+    CURRENCY_CODE_REGEX, "Currency must be a 3-letter uppercase ISO 4217 code, e.g. USD."
+)
 
 
 def validate_timezone(value: str) -> None:
@@ -135,7 +145,9 @@ class User(AbstractBaseUser, PermissionsMixin):
     timezone = models.CharField(max_length=64, default="UTC", validators=[validate_timezone])
     # VARCHAR(3), not ADR-0003's literal CHAR(3) — see journal/models.py's
     # Execution.currency comment and docs/data/schema.md for why.
-    base_currency = models.CharField(max_length=3, default="USD")
+    base_currency = models.CharField(
+        max_length=3, default="USD", validators=[validate_currency_code]
+    )
     trading_rules = models.TextField(blank=True, default="")
 
     is_active = models.BooleanField(default=True)
@@ -150,6 +162,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     class Meta:
         constraints = [
             models.UniqueConstraint(Lower("email"), name="accounts_user_email_lower_uniq"),
+            models.CheckConstraint(
+                condition=models.Q(base_currency__regex=CURRENCY_CODE_REGEX),
+                name="accounts_user_base_currency_iso_format",
+            ),
         ]
 
     def __str__(self) -> str:

@@ -238,211 +238,6 @@ def test_save_accepts_django_real_positional_signature():
 
 
 @pytest.mark.django_db
-def test_get_or_create_and_update_or_create_work_on_default_manager():
-    """
-    Round-5 code review: get_or_create()/update_or_create() proxied through the
-    raising get_queryset(), contradicting the manager's own docstring claim that
-    .create() is the one exception — and directly blocking the idempotent-import
-    pattern CLAUDE.md requires ("dedupe by broker + execution id"), whose natural
-    implementation is exactly
-    Execution.objects.get_or_create(user=..., broker=..., broker_execution_id=...,
-    defaults={...}). Neither call can leak: `user` is a required, explicit kwarg.
-    """
-    user = User.objects.create_user(email="q@example.com", password="x")
-
-    execution, created = Execution.objects.get_or_create(
-        user=user,
-        broker="topstep",
-        broker_execution_id="1:entry",
-        defaults=dict(
-            symbol="MNQZ5",
-            side=Execution.SIDE_BUY,
-            quantity="1",
-            price="1",
-            currency="USD",
-            executed_at=timezone.now(),
-            source=Execution.SOURCE_IMPORT,
-        ),
-    )
-    assert created
-
-    # Idempotent re-call (the actual importer use case): same row, not created again.
-    same_execution, created_again = Execution.objects.get_or_create(
-        user=user,
-        broker="topstep",
-        broker_execution_id="1:entry",
-        defaults=dict(
-            symbol="MNQZ5",
-            side=Execution.SIDE_BUY,
-            quantity="1",
-            price="1",
-            currency="USD",
-            executed_at=timezone.now(),
-            source=Execution.SOURCE_IMPORT,
-        ),
-    )
-    assert not created_again
-    assert same_execution.pk == execution.pk
-
-    execution, updated = Execution.objects.update_or_create(
-        user=user,
-        broker="topstep",
-        broker_execution_id="1:entry",
-        defaults={"fees": "1.23"},
-    )
-    assert str(execution.fees) == "1.23"
-
-
-@pytest.mark.django_db
-def test_get_or_create_with_user_only_in_defaults_is_rejected():
-    """
-    Round-6 code review: round 5's bypass let get_or_create()/update_or_create() proxy
-    straight to the unscoped queryset, but the *lookup* kwargs (not `defaults`) decide
-    which existing row gets returned — `defaults` only applies on create. Confirmed live
-    before this fix: Execution.objects.get_or_create(broker="topstep",
-    broker_execution_id="SHARED1", defaults=dict(user=user_b, ...)), with `user` only in
-    `defaults`, returned user_a's existing matching row with created=False — no save()
-    ever ran, so the cross-tenant FK guard on save() never got a chance to fire. Must now
-    raise instead of leaking.
-    """
-    user_a = User.objects.create_user(email="t@example.com", password="x")
-    user_b = User.objects.create_user(email="u@example.com", password="x")
-
-    existing = Execution.objects.create(
-        user=user_a,
-        broker="topstep",
-        broker_execution_id="SHARED1",
-        symbol="MNQZ5",
-        side=Execution.SIDE_BUY,
-        quantity="1",
-        price="1",
-        currency="USD",
-        executed_at=timezone.now(),
-        source=Execution.SOURCE_IMPORT,
-    )
-
-    with pytest.raises(ValueError):
-        Execution.objects.get_or_create(
-            broker="topstep",
-            broker_execution_id="SHARED1",
-            defaults=dict(
-                user=user_b,
-                symbol="MNQZ5",
-                side=Execution.SIDE_BUY,
-                quantity="1",
-                price="1",
-                currency="USD",
-                executed_at=timezone.now(),
-                source=Execution.SOURCE_IMPORT,
-            ),
-        )
-
-    # No leak occurred: user_a's row is untouched, and nothing new was created for
-    # user_b under this broker/broker_execution_id pair.
-    existing.refresh_from_db()
-    assert existing.user_id == user_a.pk
-    assert not Execution.unscoped.filter(
-        broker="topstep", broker_execution_id="SHARED1", user=user_b
-    ).exists()
-
-
-@pytest.mark.django_db
-def test_get_or_create_with_conflicting_defaults_user_does_not_commit():
-    """
-    Round-7 addendum: round 6's "require user= in lookup kwargs + check after" fix was
-    still insufficient. Confirmed live: Execution.objects.get_or_create(user=user_a,
-    broker="topstep", broker_execution_id="X1", defaults=dict(user=user_b, ...)), with
-    *no* existing match — Django's own get_or_create() lets defaults["user"] override
-    the lookup kwargs' user when building the row to create, so it COMMITS with
-    user_id=user_b.pk inside Django's own transaction, and only then does the
-    after-the-fact check run and raise — too late, the row already existed (confirmed via
-    Execution.unscoped.filter(...) showing the leaked row despite the raise). Fixed by
-    validating before calling Django's own get_or_create()/update_or_create() at all: a
-    conflicting defaults["user"]/["user_id"] now raises immediately, and nothing commits.
-    """
-    user_a = User.objects.create_user(email="aa@example.com", password="x")
-    user_b = User.objects.create_user(email="bb@example.com", password="x")
-
-    with pytest.raises(ValueError):
-        Execution.objects.get_or_create(
-            user=user_a,
-            broker="topstep",
-            broker_execution_id="X1",
-            defaults=dict(
-                user=user_b,
-                symbol="MNQZ5",
-                side=Execution.SIDE_BUY,
-                quantity="1",
-                price="1",
-                currency="USD",
-                executed_at=timezone.now(),
-                source=Execution.SOURCE_IMPORT,
-            ),
-        )
-
-    # Nothing committed at all, for either user — the row must not exist even briefly.
-    assert not Execution.unscoped.filter(
-        broker="topstep", broker_execution_id="X1"
-    ).exists()
-
-
-@pytest.mark.django_db
-def test_get_or_create_defaults_user_matching_lookup_is_fine():
-    """
-    Companion to the test above: defaults specifying user/user_id is only a problem when
-    it *conflicts* with the lookup kwargs. Specifying the same user in both is a normal,
-    harmless call shape and must keep working.
-    """
-    user = User.objects.create_user(email="cc@example.com", password="x")
-
-    execution, created = Execution.objects.get_or_create(
-        user=user,
-        broker="topstep",
-        broker_execution_id="X3",
-        defaults=dict(
-            user=user,  # same user, redundant but not conflicting
-            symbol="MNQZ5",
-            side=Execution.SIDE_BUY,
-            quantity="1",
-            price="1",
-            currency="USD",
-            executed_at=timezone.now(),
-            source=Execution.SOURCE_IMPORT,
-        ),
-    )
-    assert created
-    assert execution.user_id == user.pk
-
-
-@pytest.mark.django_db
-def test_get_or_create_accepts_user_id_lookup_kwarg():
-    """
-    Round-7 code review: _require_user_in_lookup_kwargs originally only checked for the
-    literal key "user", incorrectly rejecting the equally valid user_id= lookup kwarg on
-    get_or_create/update_or_create — failed closed (no leak), but blocked a legitimate
-    call shape.
-    """
-    user = User.objects.create_user(email="dd@example.com", password="x")
-
-    execution, created = Execution.objects.get_or_create(
-        user_id=user.pk,
-        broker="topstep",
-        broker_execution_id="X4",
-        defaults=dict(
-            symbol="MNQZ5",
-            side=Execution.SIDE_BUY,
-            quantity="1",
-            price="1",
-            currency="USD",
-            executed_at=timezone.now(),
-            source=Execution.SOURCE_IMPORT,
-        ),
-    )
-    assert created
-    assert execution.user_id == user.pk
-
-
-@pytest.mark.django_db
 def test_cross_tenant_check_skipped_when_user_id_is_none_lets_real_not_null_surface():
     """
     Round-7 code review: without a self.user_id is None guard, a row saved without
@@ -669,3 +464,121 @@ def test_standalone_execution_delete_is_restricted_by_journal_entry():
     # Neither row was touched: RESTRICT blocks the delete outright.
     assert Execution.unscoped.filter(pk=execution.pk).exists()
     assert JournalEntry.unscoped.filter(pk=entry.pk).exists()
+
+
+# --- Round-9 code review fixes ------------------------------------------------------
+
+
+def _make_import_execution(user, **overrides):
+    fields = dict(
+        user=user, broker="topstep", broker_execution_id="X1", symbol="AAPL",
+        side=Execution.SIDE_BUY, quantity="1", price="1", currency="USD",
+        executed_at=timezone.now(), source=Execution.SOURCE_IMPORT,
+    )
+    fields.update(overrides)
+    return Execution.objects.create(**fields)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("owner_field", ["user", "user_id"])
+def test_owner_only_update_fields_save_still_checks_all_guarded_fks(owner_field):
+    """
+    Round-9 bug: save(update_fields=["user"]) skipped the cross-tenant FK check because
+    only the *guarded FK* names were matched against update_fields. Changing the owner
+    of a row whose FK targets stay put is exactly the cross-tenant case. When the owner
+    field is being written, every guarded FK must be re-checked, not just listed ones.
+    """
+    user_a = User.objects.create_user(email="r9a@example.com", password="x")
+    user_b = User.objects.create_user(email="r9b@example.com", password="x")
+
+    entry = _make_journal_entry(user_a)
+    entry.user = user_b
+    with pytest.raises(CrossTenantForeignKeyError):
+        entry.save(update_fields=[owner_field])
+    assert JournalEntry.unscoped.get(pk=entry.pk).user_id == user_a.pk
+
+    row = _make_raw_import_row(user_a)  # RawImportRow.import_batch
+    row.user = user_b
+    with pytest.raises(CrossTenantForeignKeyError):
+        row.save(update_fields=[owner_field])
+    assert RawImportRow.unscoped.get(pk=row.pk).user_id == user_a.pk
+
+    execution = _make_import_execution(
+        user_a, raw_import_row=_make_raw_import_row(user_a)
+    )  # Execution.raw_import_row
+    execution.user = user_b
+    with pytest.raises(CrossTenantForeignKeyError):
+        execution.save(update_fields=[owner_field])
+    assert Execution.unscoped.get(pk=execution.pk).user_id == user_a.pk
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("bad_id", [None, ""])
+def test_import_execution_requires_broker_execution_id(bad_id):
+    """
+    Round-9 bug: the partial unique index execution_broker_dedupe exempts NULL and ""
+    broker_execution_id, so an import row with a blank id was never deduped — breaking
+    the idempotent-import guarantee. source='import' must carry a real id (DB CHECK).
+    """
+    user = User.objects.create_user(email="r9c@example.com", password="x")
+
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            _make_import_execution(user, broker_execution_id=bad_id)
+
+    # Manual entries stay exempt, and a real import id is fine.
+    _make_import_execution(user, source=Execution.SOURCE_MANUAL, broker_execution_id=None)
+    _make_import_execution(user, broker_execution_id="REAL-1")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("bad", ["usd", "us", "U1D", ""])
+def test_execution_currency_must_be_three_uppercase_letters(bad):
+    user = User.objects.create_user(email="r9d@example.com", password="x")
+
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            _make_import_execution(user, currency=bad)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("bad", ["usd", "us"])
+def test_journalentry_risk_currency_must_be_three_uppercase_letters(bad):
+    user = User.objects.create_user(email="r9e@example.com", password="x")
+    execution = _make_execution(user)
+
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            JournalEntry.objects.create(
+                user=user, opening_execution=execution,
+                planned_risk_amount="100.00", risk_currency=bad,
+            )
+
+
+def test_currency_validators_reject_bad_codes_on_full_clean():
+    from django.core.exceptions import ValidationError
+
+    entry = JournalEntry(risk_currency="usd")
+    with pytest.raises(ValidationError) as excinfo:
+        entry.clean_fields(exclude=[
+            f.name for f in JournalEntry._meta.fields if f.name != "risk_currency"
+        ])
+    assert "risk_currency" in excinfo.value.message_dict
+
+    execution = Execution(currency="us")
+    with pytest.raises(ValidationError) as excinfo:
+        execution.clean_fields(exclude=[
+            f.name for f in Execution._meta.fields if f.name != "currency"
+        ])
+    assert "currency" in excinfo.value.message_dict
+
+
+@pytest.mark.django_db
+def test_get_or_create_is_not_offered_on_the_scoped_manager():
+    """Round-9: the hand-rolled overrides were removed; the raising get_queryset() makes
+    the stock methods fail closed until the importer defines its own upsert."""
+    user = User.objects.create_user(email="r9f@example.com", password="x")
+    with pytest.raises(RuntimeError):
+        Execution.objects.get_or_create(user=user, broker="topstep", broker_execution_id="Z")
+    with pytest.raises(RuntimeError):
+        Execution.objects.update_or_create(user=user, broker="topstep", broker_execution_id="Z")
