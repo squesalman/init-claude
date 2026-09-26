@@ -6,8 +6,9 @@ territory) — there is deliberately no `trade` table here.
 
 from django.conf import settings
 from django.db import models
-from django.db.models.functions import Length
-from django.db.models.lookups import LessThanOrEqual
+from django.db.models import Value
+from django.db.models.functions import Length, Trim
+from django.db.models.lookups import Exact, LessThanOrEqual
 
 from accounts.models import CURRENCY_CODE_REGEX, validate_currency_code
 
@@ -296,6 +297,7 @@ class RawImportRow(UserOwned):
     STATUS_IMPORTED = _STATUS_IMPORTED
     STATUS_SKIPPED_DUPLICATE = _STATUS_SKIPPED_DUPLICATE
     STATUS_FAILED = _STATUS_FAILED
+    STATUS_SKIPPED_CONFLICT = _STATUS_SKIPPED_CONFLICT
     STATUS_CHOICES = _STATUS_CHOICES
 
     import_batch = models.ForeignKey(
@@ -449,11 +451,16 @@ class Execution(UserOwned):
                 condition=models.Q(currency__regex=CURRENCY_CODE_REGEX),
                 name="execution_currency_iso_format",
             ),
-            # A stray '' would merge unrelated trades into one matcher bucket (ADR-0004).
+            # A stray ''/'  ' would merge unrelated trades into one matcher bucket (ADR-0004).
             models.CheckConstraint(
                 condition=models.Q(broker_trade_id__isnull=True)
-                | ~models.Q(broker_trade_id=""),
+                | ~models.Q(Exact(Trim("broker_trade_id"), Value(""))),
                 name="execution_broker_trade_id_not_blank",
+            ),
+            # The label is part of the dedupe key: 'A' vs 'A ' would double-insert one fill.
+            models.CheckConstraint(
+                condition=models.Q(Exact(models.F("broker_account_label"), Trim("broker_account_label"))),
+                name="execution_broker_account_label_trimmed",
             ),
             # An import row with a NULL/blank broker_execution_id is exempt from the
             # partial unique index above and would never dedupe, so imports must carry a

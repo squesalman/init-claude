@@ -656,3 +656,42 @@ def test_rawimportrow_status_skipped_conflict_accepted_unknown_rejected():
     with pytest.raises(IntegrityError):
         with transaction.atomic():
             make(2, "bogus")
+
+
+# --- Row 6 code-review fixes: trimmed label, non-blank trade id, status attribute ---
+
+
+def test_rawimportrow_has_status_skipped_conflict_attribute():
+    assert RawImportRow.STATUS_SKIPPED_CONFLICT == "skipped_conflict"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("label", ["A ", " A", " "])
+def test_broker_account_label_must_be_trimmed(label):
+    user = User.objects.create_user(email="r6e@example.com", password="x")
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            _make_import_execution(user, broker_execution_id="L1", broker_account_label=label)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("label", ["A", ""])
+def test_broker_account_label_trimmed_or_empty_accepted(label):
+    user = User.objects.create_user(email="r6f@example.com", password="x")
+    _make_import_execution(user, broker_execution_id="L2", broker_account_label=label)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("trade_id", ["", " "])
+def test_broker_trade_id_blank_or_whitespace_rejected(trade_id):
+    user = User.objects.create_user(email="r6g@example.com", password="x")
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            _make_import_execution(user, broker_execution_id="W1", broker_trade_id=trade_id)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("trade_id", [None, "x"])
+def test_broker_trade_id_null_or_value_accepted(trade_id):
+    user = User.objects.create_user(email="r6h@example.com", password="x")
+    _make_import_execution(user, broker_execution_id="W2", broker_trade_id=trade_id)

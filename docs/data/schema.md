@@ -67,8 +67,8 @@ Immutable by convention (never `UPDATE`d; corrections delete+recreate).
 |---|---|---|---|
 | `broker` | `VARCHAR(32)` | no | `'topstep'` or `'manual'` |
 | `broker_execution_id` | `VARCHAR(128)` | yes | `NULL` for manual entry. The dedupe `UniqueConstraint` below (`execution_broker_dedupe`) exempts both `NULL` **and** empty string — see that constraint's note |
-| `broker_account_label` | `VARCHAR(64)` | no, default `''` | verbatim from export; no account table yet. Part of the dedupe key (ADR-0004 §1); blank labels compare equal |
-| `broker_trade_id` | `VARCHAR(128)` | yes | broker-reported round-trip id (Topstep row `Id`), set on both legs; `NULL` for manual / fill-only imports. Matcher bucket key (ADR-0004 §3). `CHECK (broker_trade_id IS NULL OR broker_trade_id <> '')` — `execution_broker_trade_id_not_blank` (a stray `''` would merge unrelated trades) |
+| `broker_account_label` | `VARCHAR(64)` | no, default `''` | from export; no account table yet. Part of the dedupe key (ADR-0004 §1); blank labels compare equal. Must be stored trimmed: `CHECK (broker_account_label = btrim(broker_account_label))` — `execution_broker_account_label_trimmed` (else `'A'` vs `'A '` would double-insert one fill); importer must strip before insert |
+| `broker_trade_id` | `VARCHAR(128)` | yes | broker-reported round-trip id (Topstep row `Id`), set on both legs; `NULL` for manual / fill-only imports. Matcher bucket key (ADR-0004 §3). `CHECK (broker_trade_id IS NULL OR btrim(broker_trade_id) <> '')` — `execution_broker_trade_id_not_blank` (a stray `''` or whitespace-only value would merge unrelated trades) |
 | `symbol` | `VARCHAR(32)` | no | uppercased, as broker wrote it |
 | `side` | `VARCHAR(4)` | no | `CHECK (side IN ('buy','sell'))`. Derived from `SIDE_CHOICES` the same way as `status` above (round-8 code review) — see that note |
 | `quantity` | `NUMERIC(20,10)` | no | `CHECK (quantity > 0)`. Always positive; direction lives in `side` |
@@ -88,9 +88,9 @@ Constraints/indexes:
   **Widened from 3 to 4 columns in migration `0003` (ADR-0004 §1)** so the same broker id in
   two accounts is not a duplicate; the `WHERE` is unchanged. Rolling `0003` back restores the
   3-column index and fails if rows differing only by label exist. The `EXPLAIN` note below
-  was measured on the 3-column form; not re-measured on the 4-column one. This *is* idempotent import; no
-  importer-side locking needed. Verified with `EXPLAIN`: a lookup by
-  `(user_id, broker, broker_execution_id)` used this index directly (`Index Scan using
+  was measured on the old 3-column form; not re-measured on the 4-column one. This *is* idempotent import; no
+  importer-side locking needed. Verified with `EXPLAIN` (on the old 3-column form): a lookup by
+  `(user_id, broker, broker_execution_id)` used this index directly; a lookup must now also pin `broker_account_label` (the 4th column) to use the full key (`Index Scan using
   execution_broker_dedupe`). **Extended round-6 code review** to also exclude empty string,
   not just `NULL`: a hand-rolled write path persisting `""` instead of `None` would
   otherwise create spurious collisions between unrelated manual entries, since `""` is
@@ -188,7 +188,7 @@ break the ordinary `Model.objects.create(user=..., ...)` idiom.
 `get_or_create()`/`update_or_create()` are **not** overridden and fail closed
 (`RuntimeError` from the raising `get_queryset()`). Hand-rolled versions leaked cross-tenant
 rows through `defaults=` across three review rounds and were removed (round 9); the Topstep
-importer will define its exact upsert, idempotent on `(user, broker, broker_execution_id)`,
+importer will define its exact upsert, idempotent on `(user, broker, broker_account_label, broker_execution_id)`,
 when it is written.
 
 Each `UserOwned` subclass also gets a second manager, `unscoped` (a plain
