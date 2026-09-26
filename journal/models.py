@@ -148,6 +148,10 @@ class UserOwned(models.Model):
         # out of kwargs and forwarding *args/**kwargs unchanged avoids the collision
         # entirely — this override never needs to pass update_fields on, only inspect it.
         update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            # Django accepts any iterable; materialize once so a one-shot iterable
+            # (generator) isn't consumed by the check below before super().save() (R11).
+            kwargs["update_fields"] = update_fields = frozenset(update_fields)
         # Perf: only re-run the (one SELECT per guarded FK) cross-tenant check when it
         # could matter — a full save/create, or an update_fields save touching a guarded
         # FK or the owner. A plain-field update (e.g. `save(update_fields=["note"])`)
@@ -156,7 +160,7 @@ class UserOwned(models.Model):
         if update_fields is None:
             self._check_cross_tenant_fks()
         else:
-            touched = set(update_fields)
+            touched = update_fields
             owner = self._meta.get_field("user")
             # Writing the owner changes what EVERY guarded FK must match, including FKs
             # not listed in update_fields (their columns stay, the owner moves), so an

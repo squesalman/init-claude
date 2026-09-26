@@ -238,6 +238,20 @@ def test_save_accepts_django_real_positional_signature():
 
 
 @pytest.mark.django_db
+def test_save_accepts_one_shot_iterable_update_fields():
+    """Round-11 code review: set(update_fields) consumed a generator before it reached
+    Model.save(), which then saw an empty update_fields and raised AssertionError."""
+    user = User.objects.create_user(email="g@example.com", password="x")
+    entry = _make_journal_entry(user)
+
+    entry.note = "generator"
+    entry.save(update_fields=(f for f in ["note"]))
+
+    entry.refresh_from_db()
+    assert entry.note == "generator"
+
+
+@pytest.mark.django_db
 def test_cross_tenant_check_skipped_when_user_id_is_none_lets_real_not_null_surface():
     """
     Round-7 code review: without a self.user_id is None guard, a row saved without
