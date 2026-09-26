@@ -2,6 +2,7 @@
 
 Spec: [`import-account-label.md`](../product/features/import-account-label.md) (product). Story 3 of [`mvp.md`](../product/features/mvp.md). Data rules: [ADR-0004](../adr/0004-topstep-dedupe-and-pairing.md). Delete semantics: [ADR-0005](../adr/0005-batch-delete.md) (Accepted, option (a), 2026-09-26).
 Status: final for `frontend-engineer`. No `[TBD]` markers remain. Open questions are in section 9.
+Scope note (user ruling, 2026-09-26): manual trade entry is out of scope for slice 1 (import + list). This doc has no "add a trade" action or "manual trades" wording. When manual entry exists, restore an "add a trade" action in the empty imports list (3.4 case B, section 5 "Empty list") and re-add "manual trades" to the delete-dialog body copy.
 
 `docs/design/` had no other files when this was written, so this doc also fixes the few conventions it needs (see "Conventions used"). A design-system doc should absorb them later.
 
@@ -194,7 +195,7 @@ Three variants, chosen server-side from ADR-0005 §5 inputs.
 | This removes the 40 trades that came from this file, and |
 | the upload record (including 4 rows that were skipped or |
 | could not be read).                                      |
-| Your other imports and manual trades stay as they are.   |
+| Your other imports stay as they are.                     |
 |                                                          |
 | This can't be undone.                                    |
 |                                                          |
@@ -212,8 +213,7 @@ Three variants, chosen server-side from ADR-0005 §5 inputs.
 | Uploaded Sep 26, 2026, 2:02 PM  -  Account: Combine 50K  |
 |                                                          |
 | This removes the 40 trades that came from this file, and |
-| the upload record. Your other imports and manual trades  |
-| stay as they are.                                        |
+| the upload record. Your other imports stay as they are.  |
 |                                                          |
 | You've journaled 3 of these trades (2 with written       |
 | notes). Deleting the import deletes those journal        |
@@ -308,7 +308,7 @@ Case B: that was the user's only import (list empty).
 |                                                                          |
 | No imports yet                                                           |
 | Your uploads will show up here, with what was imported and what was      |
-| skipped. You can also add a trade by hand.       [ Add a trade ]         |
+| skipped.                                                                 |
 ```
 
 - **Focus after delete:** from a conflict or mismatch banner (`?from=banner`) focus goes to the Account input. From the detail header button or the list row menu, focus goes to the flash (so the result is announced and the user chooses what to do next).
@@ -448,9 +448,9 @@ Tone: say what happened, say what is or is not lost, say the next step. Never "e
 | Banner and header button, menu item | Delete this import |
 | Dialog title | Delete this import? |
 | Dialog subtitle | {filename}, uploaded {date time tz}. Account: {label / no account name / not recorded} |
-| Body, variant 1 | This removes the {n} trades that came from this file, and the upload record (including {k} rows that were skipped or could not be read). Your other imports and manual trades stay as they are. |
-| Body, variant 1, k = 0 | This removes the {n} trades that came from this file, and the upload record. Your other imports and manual trades stay as they are. |
-| Body, variant 2 lead | This removes the {n} trades that came from this file, and the upload record. Your other imports and manual trades stay as they are. |
+| Body, variant 1 | This removes the {n} trades that came from this file, and the upload record (including {k} rows that were skipped or could not be read). Your other imports stay as they are. |
+| Body, variant 1, k = 0 | This removes the {n} trades that came from this file, and the upload record. Your other imports stay as they are. |
+| Body, variant 2 lead | This removes the {n} trades that came from this file, and the upload record. Your other imports stay as they are. |
 | Body, variant 2 journal | You've journaled {N} of these trades ({M} with written notes). Deleting the import deletes those journal entries too. |
 | List heading | Journal entries that will be deleted |
 | List helper | Want to keep any of your writing? Copy it from the list or open the trade first. |
@@ -467,7 +467,7 @@ Tone: say what happened, say what is or is not lost, say the next step. Never "e
 | Dialog failure | Something went wrong and nothing was deleted. Try again in a moment. |
 | Live region, tick | Delete button is now available / Delete button is not available |
 | Flashes | See the table in 3.4 |
-| Empty list | No imports yet. Your uploads will show up here, with what was imported and what was skipped. You can also add a trade by hand. |
+| Empty list | No imports yet. Your uploads will show up here, with what was imported and what was skipped. |
 | Row menu button label | Actions for {filename} |
 
 Status labels (text always shown with an icon): Imported, Skipped (duplicate), Skipped (conflict), Failed. Icons: check, equals/skip, info-circle, cross-in-circle. The conflict icon is info, not warning-triangle, on purpose (coach tone). The delete dialog uses no warning icon either.

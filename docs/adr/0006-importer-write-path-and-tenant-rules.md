@@ -1,8 +1,8 @@
 # ADR-0006: Importer write path, and tenant rules for forms and views
 
-- **Status:** Proposed
+- **Status:** Accepted (user approved 2026-09-26)
 - **Date:** 2026-09-26
-- **Deciders:** architect (proposed), user (pending)
+- **Deciders:** architect (proposed), user (approved 2026-09-26)
 - **Depends on:** [ADR-0002](0002-stack-revised.md) (tenant isolation, RLS trigger), [ADR-0003](0003-data-model.md)
   (§4 dedupe index, pre-fetch diff), [ADR-0004](0004-topstep-dedupe-and-pairing.md) (dedupe key, collision
   table, `broker_trade_id`), [ADR-0005](0005-batch-delete.md) (`for_user()` service pattern)
