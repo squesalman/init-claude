@@ -20,18 +20,19 @@ Deferred on purpose. Each has a trigger: do it when that happens, not before.
 
 ## Row 6 migration spec (ADR-0004)
 
-One migration, all additive/loosening, no data rewrite, safe on a populated table.
+One migration, no data rewrite. Additive/loosening except the two new CHECKs (items 2, 5b), which fail `migrate` if a populated table already holds a padded label or whitespace-only `broker_trade_id` (none exist: `0003` is unmerged and `broker_trade_id` is new).
 
 1. **`journal_execution.broker_trade_id`**: add `VARCHAR(128) NULL`, no default (metadata-only in PG).
    Model: `CharField(max_length=128, null=True, blank=True)`.
-2. **CHECK `execution_broker_trade_id_not_blank`**: `broker_trade_id IS NULL OR broker_trade_id <> ''`
-   (a stray `''` would merge unrelated trades into one matcher bucket).
+2. **CHECK `execution_broker_trade_id_not_blank`**: `broker_trade_id IS NULL OR btrim(broker_trade_id) <> ''`
+   (a stray `''` or whitespace-only value would merge unrelated trades into one matcher bucket).
 3. **Replace `execution_broker_dedupe`** (RemoveConstraint + AddConstraint, same name):
    `UNIQUE (user_id, broker, broker_account_label, broker_execution_id) WHERE broker_execution_id IS NOT NULL AND broker_execution_id <> ''`.
    Condition unchanged; key only gets looser, so it cannot fail on existing rows.
 4. **`RawImportRow` status**: append `("skipped_conflict", "Skipped (conflict)")` to `_STATUS_CHOICES`;
    `rawimportrow_status_valid` regenerates (drop + add). Fits existing `VARCHAR(20)`; no length change.
 5. **No change** to `execution_import_requires_broker_execution_id` or `broker_account_label` (stays `NOT NULL DEFAULT ''`).
+   5b. **CHECK `execution_broker_account_label_trimmed`**: `broker_account_label = btrim(broker_account_label)` (label is part of the dedupe key; `'A'` vs `'A '` would double-insert one fill).
 6. Tests first: same id + different label → both insert; same id + same label → `IntegrityError`;
    `broker_trade_id=''` rejected; `skipped_conflict` accepted, unknown status rejected.
    Update `docs/data/schema.md` to match.

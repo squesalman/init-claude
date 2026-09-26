@@ -596,3 +596,102 @@ def test_get_or_create_is_not_offered_on_the_scoped_manager():
         Execution.objects.get_or_create(user=user, broker="topstep", broker_execution_id="Z")
     with pytest.raises(RuntimeError):
         Execution.objects.update_or_create(user=user, broker="topstep", broker_execution_id="Z")
+
+
+# --- Row 6 / ADR-0004: per-account dedupe key, broker_trade_id, skipped_conflict ---
+
+
+@pytest.mark.django_db
+def test_dedupe_key_includes_account_label():
+    user = User.objects.create_user(email="r6a@example.com", password="x")
+    _make_import_execution(user, broker_execution_id="D1", broker_account_label="A")
+    # Same id, different label (a second account): both insert.
+    _make_import_execution(user, broker_execution_id="D1", broker_account_label="B")
+    _make_import_execution(user, broker_execution_id="D1", broker_account_label="")
+    # Same id, same label: rejected by the unique index.
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            _make_import_execution(user, broker_execution_id="D1", broker_account_label="A")
+    # Blank labels compare equal (NOT NULL DEFAULT ''), so today's behaviour is kept.
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            _make_import_execution(user, broker_execution_id="D1", broker_account_label="")
+
+
+@pytest.mark.django_db
+def test_dedupe_index_still_exempts_null_and_blank_ids_with_a_label():
+    user = User.objects.create_user(email="r6b@example.com", password="x")
+    for blank in (None, ""):
+        for _ in range(2):
+            _make_import_execution(
+                user, source=Execution.SOURCE_MANUAL, broker="manual",
+                broker_execution_id=blank, broker_account_label="A",
+            )
+
+
+@pytest.mark.django_db
+def test_broker_trade_id_nullable_but_never_blank():
+    user = User.objects.create_user(email="r6c@example.com", password="x")
+    assert _make_import_execution(user, broker_execution_id="T1").broker_trade_id is None
+    ok = _make_import_execution(user, broker_execution_id="T2", broker_trade_id="ROW-9")
+    ok.refresh_from_db()
+    assert ok.broker_trade_id == "ROW-9"
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            _make_import_execution(user, broker_execution_id="T3", broker_trade_id="")
+
+
+@pytest.mark.django_db
+def test_rawimportrow_status_skipped_conflict_accepted_unknown_rejected():
+    user = User.objects.create_user(email="r6d@example.com", password="x")
+    batch = _make_import_batch(user)
+
+    def make(line, status):
+        return RawImportRow.objects.create(
+            user=user, import_batch=batch, line_number=line, raw={"a": "1"}, status=status
+        )
+
+    assert make(1, "skipped_conflict").status == "skipped_conflict"
+    assert ("skipped_conflict", "Skipped (conflict)") in RawImportRow.STATUS_CHOICES
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            make(2, "bogus")
+
+
+# --- Row 6 code-review fixes: trimmed label, non-blank trade id, status attribute ---
+
+
+def test_rawimportrow_has_status_skipped_conflict_attribute():
+    assert RawImportRow.STATUS_SKIPPED_CONFLICT == "skipped_conflict"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("label", ["A ", " A", " "])
+def test_broker_account_label_must_be_trimmed(label):
+    user = User.objects.create_user(email="r6e@example.com", password="x")
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            _make_import_execution(user, broker_execution_id="L1", broker_account_label=label)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("label", ["A", ""])
+def test_broker_account_label_trimmed_or_empty_accepted(label):
+    user = User.objects.create_user(email="r6f@example.com", password="x")
+    _make_import_execution(user, broker_execution_id="L2", broker_account_label=label)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("trade_id", ["", " "])
+def test_broker_trade_id_blank_or_whitespace_rejected(trade_id):
+    user = User.objects.create_user(email="r6g@example.com", password="x")
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            _make_import_execution(user, broker_execution_id="W1", broker_trade_id=trade_id)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("trade_id", [None, "x"])
+def test_broker_trade_id_null_or_value_accepted(trade_id):
+    user = User.objects.create_user(email="r6h@example.com", password="x")
+    _make_import_execution(user, broker_execution_id="W2", broker_trade_id=trade_id)
