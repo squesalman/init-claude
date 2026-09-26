@@ -1,0 +1,10 @@
+{# ErrorSummary (design 4.3): attention Notice, focused on load, one line per problem, field problems link to their field. #}
+{% if form.errors %}
+<div role="group" aria-labelledby="error-summary-title" tabindex="-1" autofocus class="mt-4 rounded border-l-4 border-attention bg-attention-bg p-4">
+  <h2 id="error-summary-title" class="flex items-center gap-2 font-semibold"><span class="text-attention">{% include "partials/icon.html" with name="attention" %}</span>{{ error_summary_title }}</h2>
+  <ul class="mt-2 list-disc space-y-1 pl-9">
+    {% for error in form.non_field_errors %}<li>{{ error }}</li>{% endfor %}
+    {% for field in form %}{% for error in field.errors %}<li><a href="#{{ field.auto_id }}">{{ error }}</a></li>{% endfor %}{% endfor %}
+  </ul>
+</div>
+{% endif %}

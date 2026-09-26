@@ -30,7 +30,11 @@ def signup(request):
             login(request, user)
             messages.success(request, copy.SIGNUP_WELCOME)
             return redirect(settings.LOGIN_REDIRECT_URL)
-    return render(request, "accounts/signup.html", {"form": form, "timezones": TIMEZONE_NAMES})
+    return render(
+        request,
+        "accounts/signup.html",
+        {"form": form, "timezones": TIMEZONE_NAMES, "error_summary_title": copy.SIGNUP_ERROR_SUMMARY_TITLE},
+    )
 
 
 def _safe_next(request, value):
@@ -61,6 +65,8 @@ def login_view(request):
             "form": form,
             "next": next_url,
             "login_required_notice": copy.LOGIN_REQUIRED if next_url else None,
+            # Design 4.3: both forms use the one summary title (held under SIGNUP_ in copy.py).
+            "error_summary_title": copy.SIGNUP_ERROR_SUMMARY_TITLE,
         },
     )
 

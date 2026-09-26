@@ -1,0 +1,7 @@
+{# FormField: label, Django-rendered input (it adds aria-invalid and aria-describedby), error, help. #}
+<div class="field">
+  <label for="{{ field.id_for_label }}" class="font-medium">{{ field.label }}</label>
+  {{ field }}
+  {% include "partials/field_errors.html" %}
+  {% if field.help_text %}<p id="{{ field.auto_id }}_helptext" class="mt-1 text-text-muted">{{ field.help_text }}</p>{% endif %}
+</div>

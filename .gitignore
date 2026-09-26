@@ -11,3 +11,6 @@ db.sqlite3
 staticfiles/
 .pytest_cache/
 .env
+
+# Tailwind standalone binary (scripts/tailwind.sh downloads it)
+bin/

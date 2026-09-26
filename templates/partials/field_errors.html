@@ -1,0 +1,4 @@
+{# Per-field messages under the input; id matches the aria-describedby Django adds on error. #}
+{% if field.errors %}<div id="{{ field.auto_id }}_error" class="mt-1 space-y-1 font-medium">
+  {% for error in field.errors %}<p class="flex items-start gap-1.5"><span class="text-attention">{% include "partials/icon.html" with name="attention" %}</span><span>{{ error }}</span></p>{% endfor %}
+</div>{% endif %}

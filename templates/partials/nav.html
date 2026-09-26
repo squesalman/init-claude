@@ -1,0 +1,33 @@
+{# Nav (design section 3). /imports/ is a plain href: the route does not exist yet (PR B/C). #}
+{% url 'trades' as trades_url %}{% url 'login' as login_url %}{% url 'signup' as signup_url %}
+<header class="border-b border-border bg-surface">
+  <nav aria-label="Main" class="mx-auto flex min-h-[56px] max-w-shell items-center gap-6 px-4 sm:px-6">
+    <a href="{% url 'home' %}" class="nav-link font-semibold">Trading Journal</a>
+    {% if user.is_authenticated %}
+      {% with email=user.email %}
+      <ul class="hidden items-center gap-6 sm:flex">
+        <li><a href="{{ trades_url }}" class="nav-link"{% if request.path == trades_url %} aria-current="page"{% endif %}>Trades</a></li>
+        <li><a href="/imports/" class="nav-link"{% if request.path == "/imports/" %} aria-current="page"{% endif %}>Imports</a></li>
+      </ul>
+      <div class="ml-auto hidden items-center gap-6 sm:flex">
+        <span class="text-text-muted" title="{{ email }}">{% if email|length > 24 %}{{ email|slice:":11" }}…{{ email|slice:"-12:" }}{% else %}{{ email }}{% endif %}</span>
+        <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit" class="nav-link underline underline-offset-2">Log out</button></form>
+      </div>
+      <details class="relative ml-auto sm:hidden">
+        <summary class="flex min-h-[44px] cursor-pointer items-center rounded border border-border-strong px-3 font-medium">Menu</summary>
+        <ul class="absolute right-0 z-10 mt-2 w-64 rounded border border-border bg-surface-raised p-2 shadow-lg">
+          <li><a href="{{ trades_url }}" class="nav-link flex min-h-[44px] items-center px-2"{% if request.path == trades_url %} aria-current="page"{% endif %}>Trades</a></li>
+          <li><a href="/imports/" class="nav-link flex min-h-[44px] items-center px-2"{% if request.path == "/imports/" %} aria-current="page"{% endif %}>Imports</a></li>
+          <li class="flex min-h-[44px] items-center px-2 text-text-muted"><span title="{{ email }}">{% if email|length > 24 %}{{ email|slice:":11" }}…{{ email|slice:"-12:" }}{% else %}{{ email }}{% endif %}</span></li>
+          <li><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit" class="nav-link flex min-h-[44px] w-full items-center px-2 underline underline-offset-2">Log out</button></form></li>
+        </ul>
+      </details>
+      {% endwith %}
+    {% else %}
+      <ul class="ml-auto flex items-center gap-4">
+        <li><a href="{{ login_url }}" class="nav-link flex min-h-[44px] items-center"{% if request.path == login_url %} aria-current="page"{% endif %}>Log in</a></li>
+        <li><a href="{{ signup_url }}" class="nav-link flex min-h-[44px] items-center"{% if request.path == signup_url %} aria-current="page"{% endif %}>Sign up</a></li>
+      </ul>
+    {% endif %}
+  </nav>
+</header>

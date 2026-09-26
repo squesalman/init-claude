@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Semantic tokens (design section 7 + import-account-label "Conventions used").
+   AA pairs are checked by config/test_pages.py::test_token_contrast_meets_aa. */
+:root {
+  --page: #f8fafc;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --border: #e2e8f0;
+  --border-strong: #64748b; /* input borders: 3:1 non-text contrast */
+  --text: #0f172a;
+  --text-muted: #475569;
+  --link: #1d4ed8;
+  --primary: #1d4ed8;
+  --on-primary: #ffffff;
+  --focus: #1d4ed8;
+  --info: #1d4ed8;
+  --info-bg: #eff6ff;
+  --success: #15803d;
+  --success-bg: #f0fdf4;
+  --attention: #b45309;
+  --attention-bg: #fffbeb;
+  --danger: #b91c1c;
+  --gain: #15803d;
+  --loss: #be123c;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0f172a;
+    --surface: #1e293b;
+    --surface-raised: #273449;
+    --border: #334155;
+    --border-strong: #94a3b8;
+    --text: #f1f5f9;
+    --text-muted: #cbd5e1;
+    --link: #93c5fd;
+    --primary: #93c5fd;
+    --on-primary: #0f172a;
+    --focus: #93c5fd;
+    --info: #93c5fd;
+    --info-bg: #172554;
+    --success: #86efac;
+    --success-bg: #052e16;
+    --attention: #fcd34d;
+    --attention-bg: #422006;
+    --danger: #fca5a5;
+    --gain: #86efac;
+    --loss: #fda4af;
+    color-scheme: dark;
+  }
+}
+
+@layer base {
+  body { @apply bg-page text-base text-text antialiased; }
+  a { @apply text-link underline underline-offset-2; }
+  /* Visible focus ring on every control (design section 8). */
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  [tabindex="-1"]:focus { outline: 3px solid var(--focus); outline-offset: 2px; }
+  main:focus { outline: none; } /* skip-link target, focus ring not needed */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
+}
+
+@layer components {
+  /* Django renders the <input>, so style it from the wrapper instead of a class. */
+  .field input:not([type="hidden"]) {
+    @apply mt-1 block w-full rounded border border-border-strong bg-surface px-3 py-2 text-base text-text;
+    min-height: 44px;
+  }
+  .field input[aria-invalid="true"] { @apply border-2 border-attention; }
+  .nav-link { @apply font-medium text-text no-underline; }
+  /* Current page: underline, not color alone (design section 3). */
+  .nav-link[aria-current="page"] { @apply underline decoration-2 underline-offset-4; }
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded bg-primary px-4 font-semibold text-on-primary no-underline;
+    min-height: 44px;
+  }
+  .btn-primary:disabled { @apply cursor-wait; }
+}

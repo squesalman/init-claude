@@ -1,25 +1,38 @@
-<!doctype html>
+{% load static %}<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}Trading Journal{% endblock %}</title>
+<title>{% block title %}{% endblock %} · Trading Journal</title>
+<link rel="stylesheet" href="{% static 'css/app.css' %}">
 </head>
-<body>
-{# PLAIN placeholder: frontend-engineer replaces per docs/design/auth-and-trades-list.md #}
-<nav>
-  <a href="/">Trading Journal</a>
-  {% if user.is_authenticated %}
-    <a href="/trades/">Trades</a>
-    {{ user.email }}
-    <form method="post" action="/logout/" style="display:inline">{% csrf_token %}<button type="submit">Log out</button></form>
-  {% else %}
-    <a href="/login/">Log in</a> <a href="/signup/">Sign up</a>
-  {% endif %}
-</nav>
-{% for message in messages %}<p role="status">{{ message }}</p>{% endfor %}
-<main id="main">
-{% block content %}{% endblock %}
-</main>
+<body class="min-h-screen">
+<a href="#main" class="sr-only rounded bg-surface px-3 py-2 focus:not-sr-only focus:absolute focus:left-4 focus:top-2 focus:z-50">Skip to content</a>
+{% include "partials/nav.html" %}
+{# Content width per page (design section 7): auth card 400px, tables full (max 1200px). #}
+<div class="mx-auto {% block width %}max-w-shell{% endblock %} px-4 py-6 sm:px-6">
+  {% if messages %}<div class="mb-4 space-y-2">{% for message in messages %}{% include "partials/notice.html" with variant=message.tags body=message dismiss=True %}{% endfor %}</div>{% endif %}
+  <main id="main" tabindex="-1">
+  {% block content %}{% endblock %}
+  </main>
+</div>
+<script>
+// ponytail: three tiny behaviors in plain JS; Alpine not loaded on these screens.
+// Flash close button (no auto-dismiss).
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-dismiss]");
+  if (btn) btn.closest('[role="status"]').remove();
+});
+// Busy label + disable after first submit; without JS the label just stays.
+document.addEventListener("submit", (e) => {
+  const btn = e.target.querySelector("button[data-busy]");
+  if (btn) { btn.dataset.label = btn.textContent; btn.textContent = btn.dataset.busy; btn.disabled = true; }
+});
+// Back button (bfcache) must not bring back a stuck, disabled button.
+window.addEventListener("pageshow", () => {
+  document.querySelectorAll("button[data-label]").forEach((btn) => { btn.textContent = btn.dataset.label; btn.disabled = false; });
+});
+</script>
+{% block scripts %}{% endblock %}
 </body>
 </html>
