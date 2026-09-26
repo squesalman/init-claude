@@ -323,7 +323,17 @@ def test_idn_domain_duplicate_in_other_case_is_blocked_at_signup(client):
 
 @pytest.mark.django_db
 def test_idn_domain_login_is_case_insensitive_like_ascii(client):
-    """Same promise as ASCII: typing the domain in another case still logs in."""
+    """Same promise as ASCII: typing the domain in another case still logs in.
+
+    Login lowers the typed email with Postgres lower(), which folds non-ASCII letters only
+    when the database's LC_CTYPE is a Unicode locale (postgres:16-alpine initdb gives
+    en_US.utf8). Under a C/POSIX ctype lower('Ü') stays 'Ü', so this cannot hold there.
+    """
+    with connection.cursor() as cur:
+        cur.execute("SELECT lower('Ü'), datctype FROM pg_database WHERE datname = current_database()")
+        folded, ctype = cur.fetchone()
+    if folded != "ü":
+        pytest.skip(f"DB lc_ctype {ctype!r} does not case-fold non-ASCII in lower()")
     client.post("/signup/", signup_data(email="kai@münchen.de"))
     client.post("/logout/")
     c = Client()
