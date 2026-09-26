@@ -42,7 +42,8 @@ DEBUG = os.environ.get('DJANGO_DEBUG', 'false').lower() == 'true'
 # ops sets DEBUG=false and never touches that line, the app would boot in "production
 # mode" using a key that's public in this repo's git history. Reject that exact known
 # placeholder too, with the same fail-closed philosophy as the empty-value check.
-_ENV_EXAMPLE_PLACEHOLDER_SECRET_KEY = 'CHANGE-ME-run-get_random_secret_key'
+# S105 false positive: public placeholder from .env.example, kept here only to reject it.
+_ENV_EXAMPLE_PLACEHOLDER_SECRET_KEY = 'CHANGE-ME-run-get_random_secret_key'  # noqa: S105
 
 _secret_key = os.environ.get('DJANGO_SECRET_KEY')
 # Round-8 code review: broadened beyond the one exact placeholder above. Any value
@@ -53,11 +54,16 @@ _secret_key = os.environ.get('DJANGO_SECRET_KEY')
 _looks_like_a_leftover_default = bool(_secret_key) and _secret_key.startswith(
     'django-insecure-'
 )
-if not _secret_key or _secret_key == _ENV_EXAMPLE_PLACEHOLDER_SECRET_KEY or _looks_like_a_leftover_default:
+if (
+    not _secret_key
+    or _secret_key == _ENV_EXAMPLE_PLACEHOLDER_SECRET_KEY
+    or _looks_like_a_leftover_default
+):
     if DEBUG:
         # ponytail: dev-only fallback so `runserver`/tests work with zero setup; prod
         # sets DJANGO_SECRET_KEY via the VPS .env per ADR-0002 and must not use this.
-        _secret_key = 'django-insecure-hx4@t%@gbhr)_sk5)rregy-%b$#z50r0vonm0k5=s^4s-mh)g@'
+        # S105 false positive: dev-only key, reachable only when DJANGO_DEBUG=true.
+        _secret_key = 'django-insecure-hx4@t%@gbhr)_sk5)rregy-%b$#z50r0vonm0k5=s^4s-mh)g@'  # noqa: S105
     else:
         raise ImproperlyConfigured(
             'DJANGO_SECRET_KEY must be set to a real secret when DEBUG is False — it is '

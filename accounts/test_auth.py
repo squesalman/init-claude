@@ -134,7 +134,9 @@ def test_signup_required_and_malformed_field_messages(client, field, value, mess
 
 @pytest.mark.django_db
 def test_signup_trims_email_and_password_fields_are_not_echoed(client):
-    resp = client.post("/signup/", signup_data(email="  pad@example.com  ", password2="nope-nope-nope"))
+    resp = client.post(
+        "/signup/", signup_data(email="  pad@example.com  ", password2="nope-nope-nope")
+    )
     assert resp.context["form"].cleaned_data["email"] == "pad@example.com"
     assert GOOD_PW.encode() not in resp.content
 
@@ -168,7 +170,10 @@ def test_login_follows_a_safe_next_from_query_or_post_body(client, user):
 def test_login_missing_fields_use_design_copy(client):
     resp = client.post("/login/", {"email": "", "password": ""})
     errors = resp.context["form"].errors
-    assert errors == {"email": [copy.LOGIN_EMAIL_MISSING], "password": [copy.LOGIN_PASSWORD_MISSING]}
+    assert errors == {
+        "email": [copy.LOGIN_EMAIL_MISSING],
+        "password": [copy.LOGIN_PASSWORD_MISSING],
+    }
 
 
 @pytest.mark.django_db

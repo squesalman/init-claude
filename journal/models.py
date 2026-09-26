@@ -127,7 +127,7 @@ class UserOwned(models.Model):
     # per-row `.save()` or add its own explicit ownership check before calling
     # `bulk_create`/`bulk_update`/`.update()` — see docs/data/schema.md's "Cross-tenant
     # FK integrity" section.
-    unscoped = models.Manager()
+    unscoped = models.Manager()  # noqa: DJ012 - ruff reads models.Manager() as a field; both are managers
 
     class Meta:
         abstract = True
@@ -365,11 +365,12 @@ class Execution(UserOwned):
     SOURCE_CHOICES = _SOURCE_CHOICES
 
     broker = models.CharField(max_length=32)
-    broker_execution_id = models.CharField(max_length=128, null=True, blank=True)
+    # DJ001: NULL is the manual-entry value, exempt from the dedupe index (schema.md).
+    broker_execution_id = models.CharField(max_length=128, null=True, blank=True)  # noqa: DJ001
     broker_account_label = models.CharField(max_length=64, blank=True, default="")
     # Broker-reported round-trip id (Topstep row Id), set on both legs; NULL for manual /
     # fill-only imports. The matcher buckets by it (ADR-0004 §3). Never '' — see CHECK.
-    broker_trade_id = models.CharField(max_length=128, null=True, blank=True)
+    broker_trade_id = models.CharField(max_length=128, null=True, blank=True)  # noqa: DJ001 - NULL by design
     symbol = models.CharField(max_length=32)
     side = models.CharField(max_length=4, choices=SIDE_CHOICES)
     quantity = models.DecimalField(max_digits=20, decimal_places=10)
@@ -459,7 +460,9 @@ class Execution(UserOwned):
             ),
             # The label is part of the dedupe key: 'A' vs 'A ' would double-insert one fill.
             models.CheckConstraint(
-                condition=models.Q(Exact(models.F("broker_account_label"), Trim("broker_account_label"))),
+                condition=models.Q(
+                    Exact(models.F("broker_account_label"), Trim("broker_account_label"))
+                ),
                 name="execution_broker_account_label_trimmed",
             ),
             # An import row with a NULL/blank broker_execution_id is exempt from the
@@ -478,7 +481,9 @@ class Execution(UserOwned):
         ]
         indexes = [
             # The matcher's read pattern: a user's fills for one symbol, in time order.
-            models.Index(fields=["user", "symbol", "executed_at"], name="execution_user_symbol_ts_idx"),
+            models.Index(
+                fields=["user", "symbol", "executed_at"], name="execution_user_symbol_ts_idx"
+            ),
             # Date-bounded loads / recency (trade list default sort, story 6).
             models.Index(fields=["user", "-executed_at"], name="execution_user_ts_desc_idx"),
         ]
@@ -512,9 +517,11 @@ class JournalEntry(UserOwned):
     # as rules_followed IS NOT NULL.
     rules_followed = models.BooleanField(null=True, blank=True)
     stop_price = models.DecimalField(max_digits=20, decimal_places=10, null=True, blank=True)
-    planned_risk_amount = models.DecimalField(max_digits=19, decimal_places=4, null=True, blank=True)
+    planned_risk_amount = models.DecimalField(
+        max_digits=19, decimal_places=4, null=True, blank=True
+    )
     # VARCHAR(3), not CHAR(3) — see the comment on Execution.currency above.
-    risk_currency = models.CharField(
+    risk_currency = models.CharField(  # noqa: DJ001 - NULL = no planned risk entered
         max_length=3, null=True, blank=True, validators=[validate_currency_code]
     )
     created_at = models.DateTimeField(auto_now_add=True)
