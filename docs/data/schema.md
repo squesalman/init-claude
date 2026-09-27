@@ -7,7 +7,7 @@ in `accounts/models.py` and `journal/models.py`; migrations in `accounts/migrati
 `journal/migrations/`.
 
 Two Django apps, four user-owned tables, one user table. No `trade` table — trades are a
-pure function of executions (`journal/matching.py`, not built in this task; `backend-engineer`'s
+pure function of executions (`journal/matching.py`, built in PR #6, 2026-09-27; `backend-engineer`'s
 territory per ADR-0003 §5).
 
 ## `accounts_user`
@@ -530,8 +530,8 @@ task's code-review fixes:
 
 - No `Meta.db_table` overrides needed — Django's default naming
   (`<app_label>_<model>` lowercase) already matches ADR-0003's table names exactly.
-- `journal/matching.py` (`derive_trades()`) does not exist yet — `backend-engineer`'s task,
-  per ADR-0003 follow-up 2.
+- `journal/matching.py` (`derive_trades()`) exists as of PR #6 (2026-09-27). It sorts stably by
+  `executed_at` only; callers must order executions by `(executed_at, id)` (follow-ups row 27).
 - No admin registration, views, forms, or API — explicitly out of scope for this task. See
   the "Admin known gap" note under Tenant isolation above for what registering a `UserOwned`
   model will require.

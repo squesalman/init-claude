@@ -2,7 +2,7 @@
 
 A web app where retail traders log trades, journal their reasoning and emotions, and get evidence-backed insights into *behavioral* patterns (revenge trading, overtrading, tilt, rule-breaking) — not just P&L stats.
 
-**Status:** building the MVP. Stack chosen (ADR-0002); schema, tenant-isolation tripwire and Topstep dedupe migration are merged. Signup/login/logout and the styled shell exist (PR #4), plus ruff lint (PR #5). No importer, matcher, stats, or `/imports/` and `/trades/` list yet. Next: PR B (importer + matcher + stats); see `docs/plan.md`.
+**Status:** building the MVP. Stack chosen (ADR-0002); schema, tenant-isolation tripwire and Topstep dedupe migration are merged. Signup/login/logout and the styled shell exist (PR #4), plus ruff lint (PR #5). The Topstep importer, FIFO matcher, stats and `no-store` middleware are merged (PR #6); no `/imports/` or `/trades/` list UI yet. Next: PR C (import UI); see `docs/plan.md`.
 
 **Read `docs/README.md` first.** It indexes every doc with owner and status. Found two docs that disagree? Stop, report it, and don't pick a side.
 

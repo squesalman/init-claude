@@ -1,9 +1,9 @@
 # Build plan
 
-Owner: orchestrator. Living doc. Last updated 2026-09-26. Source of truth for *what is next*; decisions live in the ADRs, follow-ups in `docs/data/follow-ups.md`.
+Owner: orchestrator. Living doc. Last updated 2026-09-27. Source of truth for *what is next*; decisions live in the ADRs, follow-ups in `docs/data/follow-ups.md`.
 
 ## Where we are
-- Merged: Django skeleton + schema (PR #1), tenant-scoped form tripwire (PR #2), Topstep dedupe migration (PR #3), auth + `UserScopedModelForm` + styled shell (PR #4), ruff lint (PR #5). 265 tests pass. No importer, matcher, stats, `/imports/`, or trades list yet.
+- Merged: Django skeleton + schema (PR #1), tenant-scoped form tripwire (PR #2), Topstep dedupe migration (PR #3), auth + `UserScopedModelForm` + styled shell (PR #4), ruff lint (PR #5), Topstep importer + FIFO matcher + stats + `no-store` middleware (PR #6, merged 2026-09-27). 356 tests pass. No `/imports/` or trades list UI yet.
 - Accepted: ADR-0002 to ADR-0006, domain specs, upload/`/imports` design, slice spec, auth/list design.
 - Final for build: `product/features/import-and-list.md` (behavior, stat card strings) and `design/auth-and-trades-list.md` (layout and copy, single source). Conflicts between them were ruled on 2026-09-26.
 
@@ -22,11 +22,11 @@ Owner: orchestrator. Living doc. Last updated 2026-09-26. Source of truth for *w
 - ADR-0006: importer uses per-row `create()` in one transaction; forms use `UserScopedModelForm`.
 
 ## Start here (next session)
-Next task is **PR B**. Before writing importer views, clear follow-ups row 19 (add `Cache-Control: no-store` middleware for authenticated pages, or a test that every `login_required` view is `never_cache`); it was triaged as "before PR B/C". Read in order: `CLAUDE.md`, `docs/README.md`, this file, ADR-0004, ADR-0006, `docs/domain/topstep-import.md`, `docs/domain/pnl-and-matching.md`. Test vectors are synthetic; the real CSV stays out of git.
+Next task is **PR C** (import UI). Row 19 is done (PR #6). Read in order: `CLAUDE.md`, `docs/README.md`, this file, ADR-0005, ADR-0006 (Decision 2 amended 2026-09-27), `docs/design/import-account-label.md`, `docs/data/follow-ups.md` rows 22-27 (PR C security checklist is row 24). Before the upload view: append every new authenticated URL to `AUTHENTICATED_URLS` in `config/test_cache_headers.py`. Dev setup: an `.env` copied before 2026-09-27 needs `POSTGRES_HOST=127.0.0.1` (not `localhost`, follow-ups row 23); `.env.example` is fixed. Test vectors are synthetic; the real CSV (`docs/all_trades_export.csv`, git-ignored) stays out of git.
 
 ## Remaining work (one branch + worktree + PR per code task, TDD, tests stay in repo)
 Merge order:
-1. **PR B, importer + matcher + stats (backend only):** Topstep parser (idempotent, keeps raw rows, ADR-0004 pairing), `derive_trades()`, win rate / total P&L / avg R. Query-budget test from ADR-0006. Test vectors from `docs/domain/`.
+1. **PR B, importer + matcher + stats (backend only): DONE, PR #6 merged 2026-09-27.** Parser, `import_file()`, `derive_trades()`, win rate / total P&L, avg R stubbed at n=0 until journaling. QA (vectors hand-computed) and security review done; findings fixed. Real 177-row export checked locally (counts only): 177 imported, re-import all `skipped_duplicate`.
 2. **PR C, import UI:** upload form with Account field, `/imports/` list + detail, delete with counted tick box (ADR-0005; its 7 tests first).
 3. **PR D, `/trades/` list + 3 stat cards.**
 

@@ -149,7 +149,7 @@ same-direction pairs), so plain FIFO across rows would merge them into fewer tra
 synthesized executions of a row get `broker_trade_id = Id`, and the matcher runs FIFO per
 `(account label, symbol, broker_trade_id)` — so each row yields exactly one trade, with exactly
 one entry lot (so a journal `stop_price` is a valid R input on any Topstep trade, see
-`pnl-and-matching.md` §3). Test vector T4 (§6) covers the nested case. Rows whose computed gross P&L disagrees with `PnL` are `failed`.
+`pnl-and-matching.md` §3). Test vector T4 (§6) covers the nested case. Rows whose computed gross P&L disagrees with `PnL` are `failed`. So are rows whose `ExitedAt` is earlier than `EnteredAt` (user ruling 2026-09-27; equal times are allowed), because the matcher orders by time and would otherwise flip the trade's direction. Implemented limits (PR #6): files over 5,000 data rows, over 10 MB, header-only, non-UTF-8, or containing a NUL byte are rejected whole with nothing written; a bad row fails alone.
 
 ## 6. Test vectors
 
