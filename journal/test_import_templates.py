@@ -187,8 +187,7 @@ def test_list_table_has_caption_scoped_headers_and_zone(logged_in, user):
     headers = d.all("th", scope="col")
     assert len(headers) == 6
     assert "(America/New_York)" in d.text
-    for word in (copy.COL_UPLOADED, copy.COL_FILE, copy.COL_ACCOUNT, copy.COL_IMPORTED,
-                 copy.COL_SKIPPED, copy.COL_FAILED):
+    for word in ("Uploaded", "File", "Account", "Imported", "Skipped", "Failed"):
         assert word in d.text
 
 
@@ -207,7 +206,8 @@ def test_list_rows_link_to_detail_and_show_counts_in_words_on_mobile(logged_in, 
 def test_list_needs_attention_badge_is_icon_and_text(logged_in, messy_batch):
     markup = main_of(page(logged_in.get("/imports/")))
     badges = re.findall(r'<span class="badge badge-attention">(.*?)</span>\s*</span>', markup, re.S)
-    assert badges and all("<svg" in b and copy.NEEDS_ATTENTION in b for b in badges)
+    label = copy.FILTER_LABELS["needs_attention"]
+    assert badges and all("<svg" in b and label in b for b in badges)
 
 
 def test_list_account_not_recorded_is_a_dash_with_hidden_words(logged_in, user):
@@ -396,9 +396,9 @@ def test_new_templates_have_no_safe_filter_inline_handlers_or_js_urls(path):
     assert "<script" not in src  # new JS lives in static/js/app.js
 
 
-def test_base_adds_no_new_inline_script():
+def test_base_has_no_inline_script():
     src = (TEMPLATES / "base.html").read_text(encoding="utf-8")
-    assert len(re.findall(r"<script>", src)) == 1  # the pre-existing one only
+    assert not re.findall(r"<script(?![^>]*\ssrc=)[^>]*>", src)  # all JS is in static/js/app.js
 
 
 def test_c1_ships_no_delete_controls(logged_in, messy_batch):
@@ -408,3 +408,28 @@ def test_c1_ships_no_delete_controls(logged_in, messy_batch):
         assert "<dialog" not in markup and "Actions for" not in markup
     for path in NEW_TEMPLATES:
         assert "delete" not in path.read_text(encoding="utf-8").lower(), path.name
+
+
+# --- review fix batch: upload request errors, aria-invalid kept for server errors ------------
+
+
+def test_upload_form_has_a_request_error_region_for_js(logged_in):
+    markup = page(logged_in.get("/imports/"))
+    form = re.search(r'<form id="upload-form".*?</form>', markup, re.S).group(0)
+    d = Doc(form)
+    region = d.one("div", id="upload-error")
+    assert region["role"] == "status"
+    assert region["data-request-error"].startswith("That file couldn't be uploaded.")
+    assert "data-request-error-text" in form
+    inner = re.search(r'<div id="upload-error".*?</div>', form, re.S).group(0)
+    assert "<svg" in inner and "hidden" in inner  # icon + text, hidden until a failure
+
+
+@pytest.mark.parametrize("label", ["Desk\tA", "A" * 65], ids=["control", "too-long"])
+def test_server_error_aria_invalid_is_not_rebound_by_alpine(logged_in, label):
+    resp = upload(logged_in, csv_bytes(T1), label=label, **HTMX)
+    account = Doc(page(resp)).one("input", name="account")
+    assert account["aria-invalid"] == "true"
+    assert "id_account_error" in account["aria-describedby"]
+    # No client binding may overwrite the server's verdict after Alpine starts.
+    assert not [name for name in account if "aria-invalid" in name and name != "aria-invalid"]

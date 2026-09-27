@@ -6,7 +6,7 @@
 {% get_current_timezone as tz %}
 <a href="{% url 'imports' %}" class="inline-flex min-h-[44px] items-center gap-1"><span aria-hidden="true">←</span>{{ copy.BACK_TO_IMPORTS }}</a>
 <h1 class="text-title font-semibold break-all" title="{{ batch.filename }}">{% include "journal/partials/filename.html" with name=batch.filename %}</h1>
-<p class="mt-1 text-text-muted">{{ copy.UPLOADED }} {{ batch.uploaded_at|date:"M j, Y, g:i A" }} ({{ tz }})</p>
+<p class="mt-1 text-text-muted">Uploaded {{ batch.uploaded_at|date:"M j, Y, g:i A" }} ({{ tz }})</p>
 <p class="mt-1 flex flex-wrap gap-x-6"><span>{{ copy.BROKER_LABEL }}: Topstep</span><span class="break-words">{{ account_line }}</span></p>
 
 {% if conflict_banner %}
@@ -30,12 +30,12 @@
 {% endif %}
 
 <section id="import-summary" aria-labelledby="summary-heading" class="card mt-6">
-  <h2 id="summary-heading" class="text-lg font-semibold">{{ copy.SUMMARY_HEADING }}</h2>
+  <h2 id="summary-heading" class="text-lg font-semibold">Summary</h2>
   {% if summary_lead %}<p class="mt-2 font-medium">{{ summary_lead }}</p>{% endif %}
   <dl class="mt-3 flex flex-wrap gap-x-8 gap-y-2">
-    <div class="flex items-baseline gap-2"><dt>{{ copy.COL_IMPORTED }}</dt> <dd class="text-lg font-semibold tabular-nums">{{ counts.imported }}</dd></div>
-    <div class="flex flex-wrap items-baseline gap-x-2"><dt>{{ copy.COL_SKIPPED }}</dt> <dd><span class="text-lg font-semibold tabular-nums">{{ counts.skipped }}</span> <span class="text-text-muted">({{ copy.DUPLICATE_WORD }} {{ counts.skipped_duplicate }}, {{ copy.CONFLICT_WORD }} {{ counts.skipped_conflict }})</span></dd></div>
-    <div class="flex items-baseline gap-2"><dt>{{ copy.COL_FAILED }}</dt> <dd class="text-lg font-semibold tabular-nums">{{ counts.failed }}</dd></div>
+    <div class="flex items-baseline gap-2"><dt>Imported</dt> <dd class="text-lg font-semibold tabular-nums">{{ counts.imported }}</dd></div>
+    <div class="flex flex-wrap items-baseline gap-x-2"><dt>Skipped</dt> <dd><span class="text-lg font-semibold tabular-nums">{{ counts.skipped }}</span> <span class="text-text-muted">(duplicate {{ counts.skipped_duplicate }}, conflict {{ counts.skipped_conflict }})</span></dd></div>
+    <div class="flex items-baseline gap-2"><dt>Failed</dt> <dd class="text-lg font-semibold tabular-nums">{{ counts.failed }}</dd></div>
   </dl>
   {% if hint and not hint.mismatch %}
   <p role="status" class="mt-3 flex items-start gap-2"><span class="text-info">{% include "partials/icon.html" with name="info" %}</span><span>{{ hint.text }} <a href="{{ hint.url }}">{{ hint.link_text }}</a></span></p>

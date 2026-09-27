@@ -128,9 +128,7 @@ MIDDLEWARE = [
 ]
 
 # Uploads (follow-ups row 24). Bodies over config.middleware.MAX_REQUEST_BYTES get a 413
-# first. Files above this size spool to a temp file instead of memory (Django's default,
-# now explicit).
-FILE_UPLOAD_MAX_MEMORY_SIZE = 2_621_440
+# first. (FILE_UPLOAD_MAX_MEMORY_SIZE is left at Django's own default: 2_621_440.)
 # The upload form takes exactly one file; a second file part is a 400.
 DATA_UPLOAD_MAX_NUMBER_FILES = 1
 

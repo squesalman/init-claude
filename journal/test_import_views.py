@@ -929,3 +929,67 @@ def test_long_symbol_on_a_failed_row_is_cut_to_16_characters(logged_in, user):
     assert row["status"] == "failed"
     assert row["symbol"] == "Q" * 16 + "…"
     assert "Q" * 17 not in resp.content.decode()
+
+
+# --- code-review fix batch: timezone leak, empty filename ---------------------------------
+
+
+def test_timezone_middleware_deactivates_after_the_response(user):
+    from config.middleware import UserTimezoneMiddleware as Middleware
+
+    timezone.deactivate()
+    request = RequestFactory().get("/")
+    request.user = user
+    Middleware(lambda r: timezone.get_current_timezone_name())(request)
+
+    assert timezone.get_current_timezone_name() == "UTC"
+
+
+def test_timezone_middleware_deactivates_when_the_view_raises(user):
+    from config.middleware import UserTimezoneMiddleware as Middleware
+
+    timezone.deactivate()
+    request = RequestFactory().get("/")
+    request.user = user
+
+    def boom(req):
+        raise RuntimeError("view failed")
+
+    with pytest.raises(RuntimeError):
+        Middleware(boom)(request)
+    assert timezone.get_current_timezone_name() == "UTC"
+
+
+def test_zone_does_not_leak_into_the_next_request(client, user, other):
+    client.force_login(user)  # America/New_York
+    assert client.get("/imports/").status_code == 200
+    assert timezone.get_current_timezone_name() == "UTC"
+
+    client.force_login(other)  # UTC
+    batch = uploaded(client, csv_bytes(T1))
+    assert "Dec 19, 9:00 AM" in detail(client, batch).content.decode()
+
+
+@pytest.mark.parametrize("name", ["\x00\x01\x02", "   ", "\x07 \x1b"])
+def test_safe_filename_never_returns_blank(name):
+    assert safe_filename(name) == "import.csv"
+
+
+def test_control_only_upload_name_is_treated_as_no_file(logged_in, user):
+    # Django's multipart parser drops such a name, so the form asks for a file.
+    resp = upload(logged_in, csv_bytes(T1), name="\x01\x02\x03")
+
+    assert resp.context["form"].errors["file"] == [copy.FILE_MISSING]
+    assert not ImportBatch.objects.for_user(user).exists()
+
+
+def test_whitespace_only_upload_name_is_stored_and_shown_as_the_fallback(logged_in, user):
+    resp = upload(logged_in, csv_bytes(T1), name="   ")
+
+    assert resp.status_code == 302
+    batch = ImportBatch.objects.for_user(user).get()
+    assert batch.filename == "import.csv"
+    for page in (logged_in.get("/imports/"), detail(logged_in, batch)):
+        html = page.content.decode()
+        assert "import.csv" in html
+        assert not re.search(rf'<a [^>]*href="/imports/{batch.pk}/"[^>]*>\s*</a>', html)

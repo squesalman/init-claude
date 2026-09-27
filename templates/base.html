@@ -23,23 +23,6 @@
   {% block content %}{% endblock %}
   </main>
 </div>
-<script>
-// ponytail: three tiny behaviors in plain JS (predate app.js; move there with follow-ups row 20).
-// Flash close button (no auto-dismiss).
-document.addEventListener("click", (e) => {
-  const btn = e.target.closest("[data-dismiss]");
-  if (btn) btn.closest('[role="status"]').remove();
-});
-// Busy label + disable after first submit; without JS the label just stays.
-document.addEventListener("submit", (e) => {
-  const btn = e.target.querySelector("button[data-busy]");
-  if (btn) { btn.dataset.label = btn.textContent; btn.textContent = btn.dataset.busy; btn.disabled = true; }
-});
-// Back button (bfcache) must not bring back a stuck, disabled button.
-window.addEventListener("pageshow", () => {
-  document.querySelectorAll("button[data-label]").forEach((btn) => { btn.textContent = btn.dataset.label; btn.disabled = false; });
-});
-</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

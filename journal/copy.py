@@ -23,7 +23,7 @@ ACCOUNT_TOO_LONG = (
     "That name is %(show_value)d characters and the limit is %(limit_value)d. "
     "Shorten it a little."
 )
-# PROVISIONAL, pending ux-designer confirmation (QA bug 1, orchestrator wording).
+# Ruled final by ux-designer 2026-09-27 (docs/design/import-account-label.md section 5).
 ACCOUNT_CONTROL_CHARACTERS = (
     "Account names can't contain line breaks or other control characters. Remove them and "
     "try again."
@@ -32,8 +32,8 @@ FILE_MISSING = "Choose a CSV file to upload."
 UPLOAD_BUTTON = "Upload"
 UPLOAD_BUSY = "Importing..."
 UPLOAD_BUSY_LIVE = "Importing your file"
-# Not in the design doc (it names no upload flash); flagged for ux-designer.
-UPLOAD_DONE = "Upload finished. Here is what happened to each row."
+# Ruled final by ux-designer 2026-09-27 (docs/design/import-account-label.md section 5).
+UPLOAD_DONE = "Import finished. Here's what happened to each row."
 
 # Imports list (3.5)
 LIST_HEADING = "Your imports"
@@ -41,7 +41,6 @@ LIST_EMPTY_HEADING = "No imports yet"
 LIST_EMPTY_BODY = "Your uploads will show up here, with what was imported and what was skipped."
 LIST_ACCOUNT_BLANK = "no name"
 LIST_ACCOUNT_NOT_RECORDED = "not recorded"  # visually hidden, next to "-"
-NEEDS_ATTENTION = "Needs attention"
 
 # Import detail (3.2)
 BACK_TO_IMPORTS = "Imports"
@@ -61,8 +60,8 @@ CONFLICT_BODY_FILLED = (
     "Check that the name is the one you meant. Nothing was lost or overwritten."
 )
 # The batch imported nothing, so its Account name is not recorded (no label column, H1):
-# neutral wording for blank and filled alike. User ruling 2026-09-27. PROVISIONAL, pending
-# ux-designer confirmation.
+# neutral wording for blank and filled alike. Ruled final by ux-designer 2026-09-27
+# (docs/design/import-account-label.md section 5, section 3.2 "when it's used").
 CONFLICT_BODY_NOT_RECORDED = (
     "Their IDs match trades you already imported, but the details differ. Nothing was lost "
     "or overwritten. Check the Account name you used, then upload the file again."
@@ -103,22 +102,11 @@ SHOWING = "Showing {start}-{end} of {total}"
 PREVIOUS = "Previous"
 NEXT = "Next"
 
-# Headings and column labels from the wireframes in design 3.2 and 3.5 (not in section 5).
-# Added by frontend-engineer, PR C1, so templates hold no literal copy.
-UPLOADED = "Uploaded"
-SUMMARY_HEADING = "Summary"
-ROWS_HEADING = "Rows"
-DUPLICATE_WORD = "duplicate"
-CONFLICT_WORD = "conflict"
-COL_UPLOADED = "Uploaded"
-COL_FILE = "File"
-COL_ACCOUNT = "Account"
-COL_IMPORTED = "Imported"
-COL_SKIPPED = "Skipped"
-COL_FAILED = "Failed"
-COL_ROW = "Row"
-COL_STATUS = "Status"
-COL_SYMBOL = "Symbol"
-COL_TIME = "Time"
-COL_SIZE = "Size"
-COL_NOTE = "Note"
+# Single-word headings/labels from the wireframes (design 3.2, 3.5; not in section 5) are
+# written directly in the templates, not held here — accounts/copy.py's own convention is
+# full sentences only, and a one-word constant used in one place buys nothing.
+
+# Shown by static/js/app.js when the upload request fails before any page comes back (a 413
+# from the body cap, or a network error). PROVISIONAL, pending ux-designer confirmation
+# (added after the 2026-09-27 ruling on the other 3 provisional strings, so not covered by it).
+UPLOAD_ERROR = "That file couldn't be uploaded. Try a smaller file, or try again in a moment."

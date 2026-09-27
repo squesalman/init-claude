@@ -74,8 +74,12 @@ class UploadForm(forms.Form):
         return upload
 
 
+FALLBACK_FILENAME = "import.csv"
+
+
 def safe_filename(name: str) -> str:
     """Display-only name: basename (either slash), no control/format characters, <= 255.
-    Never used as a storage path."""
+    Never used as a storage path. Blank after cleaning -> FALLBACK_FILENAME (no empty link)."""
     base = os.path.basename(name.replace("\\", "/"))
-    return "".join(c for c in base if not _has_control_characters(c))[:255]
+    clean = "".join(c for c in base if not _has_control_characters(c))[:255]
+    return clean if clean.strip() else FALLBACK_FILENAME

@@ -61,4 +61,7 @@ class UserTimezoneMiddleware:
         # A bad stored name must not 500. OSError: a directory name such as "America".
         except (ZoneInfoNotFoundError, ValueError, OSError):
             timezone.deactivate()
-        return self.get_response(request)
+        try:
+            return self.get_response(request)
+        finally:
+            timezone.deactivate()  # never leak this user's zone into the thread's next request

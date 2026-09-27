@@ -27,6 +27,10 @@
       {% include "journal/partials/account_field.html" %}
       <button type="submit" class="btn-primary w-full sm:w-auto" data-busy="{{ copy.UPLOAD_BUSY }}">{{ copy.UPLOAD_BUTTON }}</button>
     </fieldset>
+    {# Shown by static/js/app.js when the upload request fails before any page comes back (413 from the body cap, network error). copy.UPLOAD_ERROR is PROVISIONAL, pending ux-designer. #}
+    <div id="upload-error" role="status" data-request-error="{{ copy.UPLOAD_ERROR }}">
+      <p class="mt-4 flex items-start gap-2 font-medium" hidden><span class="text-attention">{% include "partials/icon.html" with name="attention" %}</span><span data-request-error-text></span></p>
+    </div>
     <p id="upload-live" role="status" class="sr-only" data-busy-live="{{ copy.UPLOAD_BUSY_LIVE }}"></p>
   </form>
 </section>
@@ -39,12 +43,12 @@
       <caption class="sr-only">{{ copy.LIST_HEADING }}</caption>
       <thead>
         <tr>
-          <th scope="col">{{ copy.COL_UPLOADED }} ({{ tz }})</th>
-          <th scope="col">{{ copy.COL_FILE }}</th>
-          <th scope="col">{{ copy.COL_ACCOUNT }}</th>
-          <th scope="col" class="num">{{ copy.COL_IMPORTED }}</th>
-          <th scope="col" class="num">{{ copy.COL_SKIPPED }}</th>
-          <th scope="col" class="num">{{ copy.COL_FAILED }}</th>
+          <th scope="col">Uploaded ({{ tz }})</th>
+          <th scope="col">File</th>
+          <th scope="col">Account</th>
+          <th scope="col" class="num">Imported</th>
+          <th scope="col" class="num">Skipped</th>
+          <th scope="col" class="num">Failed</th>
         </tr>
       </thead>
       <tbody>
@@ -53,7 +57,7 @@
           <td class="whitespace-nowrap">{{ b.uploaded_at|date:"M j, g:i A" }}</td>
           <th scope="row" class="font-normal">
             <a href="{% url 'import_detail' b.pk %}" title="{{ b.filename }}" class="break-all">{% include "journal/partials/filename.html" with name=b.filename %}</a>
-            {% if b.needs_attention %}<span class="mt-1 block"><span class="badge badge-attention">{% include "partials/icon.html" with name="info" %}<span>{{ copy.NEEDS_ATTENTION }}</span></span></span>{% endif %}
+            {% if b.needs_attention %}<span class="mt-1 block"><span class="badge badge-attention">{% include "partials/icon.html" with name="info" %}<span>{{ copy.FILTER_LABELS.needs_attention }}</span></span></span>{% endif %}
           </th>
           <td>{% include "journal/partials/list_account.html" with label=b.account_label %}</td>
           <td class="num">{{ b.imported_count }}</td>
@@ -71,9 +75,9 @@
     <li class="card space-y-1">
       <a href="{% url 'import_detail' b.pk %}" title="{{ b.filename }}" class="flex min-h-[44px] items-center break-all font-medium">{% include "journal/partials/filename.html" with name=b.filename %}</a>
       <p class="text-text-muted">{{ b.uploaded_at|date:"M j, g:i A" }} ({{ tz }})</p>
-      <p>{{ copy.COL_ACCOUNT }}: {% include "journal/partials/list_account.html" with label=b.account_label %}</p>
-      <p>{{ copy.COL_IMPORTED }} {{ b.imported_count }}, {{ copy.COL_SKIPPED|lower }} {{ b.skipped_count }}, {{ copy.COL_FAILED|lower }} {{ b.failed_count }}</p>
-      {% if b.needs_attention %}<p><span class="badge badge-attention">{% include "partials/icon.html" with name="info" %}<span>{{ copy.NEEDS_ATTENTION }}</span></span></p>{% endif %}
+      <p>Account: {% include "journal/partials/list_account.html" with label=b.account_label %}</p>
+      <p>Imported {{ b.imported_count }}, skipped {{ b.skipped_count }}, failed {{ b.failed_count }}</p>
+      {% if b.needs_attention %}<p><span class="badge badge-attention">{% include "partials/icon.html" with name="info" %}<span>{{ copy.FILTER_LABELS.needs_attention }}</span></span></p>{% endif %}
     </li>
     {% endfor %}
   </ul>
