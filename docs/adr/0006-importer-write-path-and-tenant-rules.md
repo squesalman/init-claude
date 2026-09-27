@@ -1,6 +1,6 @@
 # ADR-0006: Importer write path, and tenant rules for forms and views
 
-- **Status:** Accepted (user approved 2026-09-26)
+- **Status:** Accepted (user approved 2026-09-26); Decision 2 amended 2026-09-27 (cross-tenant FK error in forms is caught and shown as a form error, not a 500)
 - **Date:** 2026-09-26
 - **Deciders:** architect (proposed), user (approved 2026-09-26)
 - **Depends on:** [ADR-0002](0002-stack-revised.md) (tenant isolation, RLS trigger), [ADR-0003](0003-data-model.md)
@@ -135,9 +135,14 @@ class UserScopedModelForm(forms.ModelForm):
 ```
 
 Because every FK choice is scoped, validation rejects another tenant's id as an "invalid choice".
-`CrossTenantForeignKeyError` can then fire only because of a bug, so a 500 is the correct outcome.
-There is no need to translate it into a form error. This closes the open note in the
-`CrossTenantForeignKeyError` docstring.
+`CrossTenantForeignKeyError` can then fire only because of a bug or a tampered request that reaches
+`save()` past form validation. **Amended 2026-09-27 (user ruling, option B):** a view that saves a
+form catches `CrossTenantForeignKeyError` and re-renders the form with a generic form-level error
+("Something went wrong and nothing was saved. Try again in a moment.") instead of returning a 500.
+The message names no field and no other user's data, and the event is logged (id of the acting user
+and model name only, no values) so the bug stays visible. This matches the `CrossTenantForeignKeyError`
+docstring in `journal/models.py` and `docs/data/schema.md` ("Form/view handling"). The original
+text here said a 500 was correct and no translation was needed; that is superseded.
 
 ### Enforcement (extend `journal/test_form_scoping.py`)
 
@@ -172,7 +177,8 @@ There is no need to translate it into a form error. This closes the open note in
 
 - **Positive:** the importer goes through the same guard as every other write. Nothing new is built for
   tenancy. One base form and one grep test cover follow-ups row 5. Cross-tenant form input becomes a
-  normal validation error.
+  normal validation error, and a cross-tenant FK that still reaches `save()` becomes a generic
+  form-level error plus a log line (amended 2026-09-27), never a 500.
 - **Accepted:** the guard stays check-then-write. Under concurrency, a parent row could change owner
   between the check and the write, but no code path changes `user_id` on an existing row. That gap closes
   with the composite FKs at the trigger.
