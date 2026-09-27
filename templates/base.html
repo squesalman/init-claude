@@ -5,8 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{% endblock %} · Trading Journal</title>
 <link rel="stylesheet" href="{% static 'css/app.css' %}">
+{# htmx: no eval, same-origin only, no script execution in swaps, no page snapshots in storage, no injected <style> (CSP, follow-ups row 20). #}
+<meta name="htmx-config" content='{"allowEval":false,"selfRequestsOnly":true,"allowScriptTags":false,"historyCacheSize":0,"refreshOnHistoryMiss":true,"includeIndicatorStyles":false}'>
+{# Vendored, pinned: static/vendor/VERSIONS.md. app.js registers Alpine.data on alpine:init, so it loads before Alpine. #}
+<script defer src="{% static 'js/app.js' %}"></script>
+<script defer src="{% static 'vendor/htmx-2.0.11.min.js' %}"></script>
+<script defer src="{% static 'vendor/alpine-csp-3.17.4.min.js' %}"></script>
 </head>
-<body class="min-h-screen">
+{# CSRF for htmx requests. Only htmx pages (logged in) need it; the auth pages stay byte-identical across login outcomes (accounts/test_auth_qa.py). #}
+<body class="min-h-screen"{% if user.is_authenticated %} hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'{% endif %}>
 <a href="#main" class="sr-only rounded bg-surface px-3 py-2 focus:not-sr-only focus:absolute focus:left-4 focus:top-2 focus:z-50">Skip to content</a>
 {% include "partials/nav.html" %}
 {# Content width per page (design section 7): auth card 400px, tables full (max 1200px). #}
@@ -17,7 +24,7 @@
   </main>
 </div>
 <script>
-// ponytail: three tiny behaviors in plain JS; Alpine not loaded on these screens.
+// ponytail: three tiny behaviors in plain JS (predate app.js; move there with follow-ups row 20).
 // Flash close button (no auto-dismiss).
 document.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-dismiss]");

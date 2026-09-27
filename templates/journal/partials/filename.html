@@ -1,0 +1,1 @@
+{# Middle-truncated filename (design 3.2, 3.5, edge case 7). Screen readers get the full name; callers put it in title too. #}{% if name|length > 48 %}<span aria-hidden="true">{{ name|slice:":22" }}…{{ name|slice:"-22:" }}</span><span class="sr-only">{{ name }}</span>{% else %}{{ name }}{% endif %}

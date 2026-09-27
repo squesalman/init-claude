@@ -1,0 +1,1 @@
+{# Imports list Account cell (design 3.5): label, "no name" when imported with a blank label, "-" when nothing was imported. #}{% if label is None %}<span aria-hidden="true">-</span><span class="sr-only">{{ copy.LIST_ACCOUNT_NOT_RECORDED }}</span>{% elif label == "" %}{{ copy.LIST_ACCOUNT_BLANK }}{% else %}<span class="break-words">{{ label }}</span>{% endif %}

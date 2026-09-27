@@ -57,8 +57,9 @@ class ParsedRow:
     error: str = ""  # user-facing reason when it is not
 
 
-class _RowError(Exception):
-    pass
+class _RowError(ValueError):
+    """A row-level reason; str() is user-facing. ValueError so callers outside this module
+    (the import detail view) can catch it without reaching into a private name."""
 
 
 def parse(file_bytes: bytes) -> list[ParsedRow]:
@@ -121,7 +122,9 @@ def _price(raw: dict, column: str) -> Decimal:
     return value
 
 
-def _timestamp(raw: dict, column: str) -> datetime:
+def parse_timestamp(raw: dict, column: str) -> datetime:
+    """TopstepX timestamp cell -> aware UTC datetime. Raises ValueError when unreadable.
+    Public so the import detail view shows row times with the importer's own parsing."""
     try:
         return datetime.strptime(raw[column], _TIMESTAMP).astimezone(UTC)
     except (ValueError, OverflowError):  # OverflowError: year 1 / 9999 shifted past UTC
@@ -146,7 +149,7 @@ def _legs(raw: dict) -> tuple[dict, dict]:
     if size <= 0 or size != size.to_integral_value() or not _fits(size, 0, 10):
         raise _unreadable("Size")
     fees, commissions, pnl = (_number(raw, c) for c in ("Fees", "Commissions", "PnL"))
-    entered_at, exited_at = _timestamp(raw, "EnteredAt"), _timestamp(raw, "ExitedAt")
+    entered_at, exited_at = parse_timestamp(raw, "EnteredAt"), parse_timestamp(raw, "ExitedAt")
     if exited_at < entered_at:  # equal is fine (user ruling)
         raise _RowError(EXIT_BEFORE_ENTRY)
 

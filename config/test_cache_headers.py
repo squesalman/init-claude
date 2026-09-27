@@ -10,7 +10,7 @@ from django.test import Client
 
 # Every page a logged-in user can GET. New authenticated views (PR C: /imports/...) append
 # here so the header is checked for them too.
-AUTHENTICATED_URLS = ["/", "/trades/", "/login/", "/signup/"]
+AUTHENTICATED_URLS = ["/", "/trades/", "/login/", "/signup/", "/imports/"]
 
 
 @pytest.mark.django_db
@@ -23,6 +23,23 @@ def test_authenticated_responses_are_private_no_store(client, url):
 
     assert "no-store" in cache_control
     assert "private" in cache_control
+
+
+@pytest.mark.django_db
+def test_import_detail_is_private_no_store(client):
+    from journal.models import ImportBatch
+
+    user = get_user_model().objects.create_user(email="cachedet@example.com", password="x")
+    batch = ImportBatch.objects.create(
+        user=user, broker="topstep", filename="f.csv", file_sha256="0" * 64, raw_file=b""
+    )
+    client.force_login(user)
+
+    for url in ("/imports/", f"/imports/{batch.pk}/"):
+        response = client.get(url)
+        assert response.status_code == 200, url  # a 404 is no-store too; prove the page
+        assert "no-store" in response["Cache-Control"], url
+        assert "private" in response["Cache-Control"], url
 
 
 @pytest.mark.django_db
