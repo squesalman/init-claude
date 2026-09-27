@@ -2,6 +2,7 @@
 
 Spec: [`import-account-label.md`](../product/features/import-account-label.md) (product). Story 3 of [`mvp.md`](../product/features/mvp.md). Data rules: [ADR-0004](../adr/0004-topstep-dedupe-and-pairing.md). Delete semantics: [ADR-0005](../adr/0005-batch-delete.md) (Accepted, option (a), 2026-09-26).
 Status: final for `frontend-engineer`. No `[TBD]` markers remain. Open questions are in section 9.
+PR C1 follow-up rulings (2026-09-27): conflict-banner token (3.2, 6), the "not recorded" conflict body / upload flash / control-character copy (5, 6), and the Note-column truncation spec relaxed to full-wrap (3.2). These supersede PR C1's provisional inline copy in `journal/copy.py`; `journal/copy.py`'s own comments still say "PROVISIONAL, pending ux-designer confirmation" — that's now resolved by this doc, code just needs its comments updated.
 Scope note (user ruling, 2026-09-26): manual trade entry is out of scope for slice 1 (import + list). This doc has no "add a trade" action or "manual trades" wording. When manual entry exists, restore an "add a trade" action in the empty imports list (3.4 case B, section 5 "Empty list") and re-add "manual trades" to the delete-dialog body copy.
 
 `docs/design/` had no other files when this was written, so this doc also fixes the few conventions it needs (see "Conventions used"). A design-system doc should absorb them later.
@@ -149,7 +150,8 @@ Notes:
 - DOM order: header, **conflict banner (only if conflicts > 0)**, summary card, row list.
 - "Needs attention" only appears if conflict plus failed > 0, and is then the default filter. Otherwise "All" is the default.
 - Status column always shows an icon **and** text. Never color alone.
-- Conflict rows show symbol, time and size so the trader recognises them (spec). The Note column shows the ADR-0004 `error` text wrapped, max 2 lines with "Show more".
+- **Conflict banner token — ruled 2026-09-27, supersedes any other reading.** The conflict banner (and the mismatch banner) is `Notice` variant **`attention`** (amber-ish background/border, action needed — there's a remedy) with the **`info-circle` icon**, never the warning-triangle glyph. This matches what PR C1 shipped. The tone rule at the end of section 5 ("the conflict icon is info, not warning-triangle") is about the **glyph shape**, not the variant color — `attention` still applies because the banner asks for an action (delete, then re-upload), which is exactly what the `attention` token is for. Plain informational notices with no action (the "plain hint" line, the duplicates-only note) stay `info`. Record this in the `Notice` row of section 6 too so it isn't re-litigated.
+- Conflict rows show symbol, time and size so the trader recognises them (spec). **Note column — ruled 2026-09-27, supersedes the old "max 2 lines with Show more" spec.** Relaxed to **full-wrap, no truncation, no "Show more"**. Every note today is one importer-generated sentence from a fixed set (ADR-0004's `error` text, `topstep-import.md`'s reason strings) and none exceed roughly 90 characters, so a 2-line clamp buys nothing but a hidden "Show more" that never has anything to reveal. **Trigger to bring back the clamp:** if any importer- or matcher-generated note ever exceeds ~200 characters in practice (a new detector, a longer broker error string), add the 2-line + "Show more" behavior then, not before. PR C1's shipped full-wrap behavior is **compliant with this doc as of this ruling** — no follow-up needed.
 - Pagination: 50 rows per page, "Previous / Next" links that keep the filter (`?status=...&page=2`), footer text "Showing 51-100 of 212". Files are at most a few thousand rows (ADR-0003).
 - Banner and two duplicate Delete buttons on one page are fine: both open the same dialog. Focus returns to whichever opened it.
 
@@ -438,6 +440,9 @@ Tone: say what happened, say what is or is not lost, say the next step. Never "e
 | Conflict banner title | {N} rows were not imported (singular: 1 row was not imported) |
 | Conflict body, blank | Their IDs match trades you already imported, but the details differ. This usually means the file is from a different account. Nothing was lost or overwritten. Delete this import first, then upload again with an Account name, so nothing is counted twice. |
 | Conflict body, filled | Under the Account name '{label}' those IDs already exist with different details. Check that the name is the one you meant. Nothing was lost or overwritten. |
+| Conflict body, not recorded (ruled 2026-09-27) | Their IDs match trades you already imported, but the details differ. Nothing was lost or overwritten. Check the Account name you used, then upload the file again. |
+| Upload success flash (ruled 2026-09-27) | Import finished. Here's what happened to each row. |
+| Account control-character rejection (ruled 2026-09-27) | Account names can't contain line breaks or other control characters. Remove them and try again. |
 | Hint, plain | You uploaded this exact file on {date}. View that import |
 | Hint, mismatch title | You uploaded this exact file before |
 | Hint, mismatch body | On {date}, with Account '{old}'. Uploading it again with a different name adds these trades a second time. |
@@ -472,6 +477,8 @@ Tone: say what happened, say what is or is not lost, say the next step. Never "e
 
 Status labels (text always shown with an icon): Imported, Skipped (duplicate), Skipped (conflict), Failed. Icons: check, equals/skip, info-circle, cross-in-circle. The conflict icon is info, not warning-triangle, on purpose (coach tone). The delete dialog uses no warning icon either.
 
+**Conflict body, not recorded — when it's used (ruled 2026-09-27).** Only when the current batch imported zero executions, so its own Account label can't be read back (no `ImportBatch` label column, per H1) and the banner can't honestly say "blank" or name a specific label — both the blank and filled variants would misstate what's known. Title is still `CONFLICT_TITLE_ONE` / `CONFLICT_TITLE_MANY`. This variant never offers "Delete this import" as a fix (C1 ships no delete; C2 restores it) — it points the user at re-checking the Account name and re-uploading instead, which is the only remedy available without delete.
+
 ---
 
 ## 6. Components
@@ -479,7 +486,7 @@ Status labels (text always shown with an icon): Imported, Skipped (duplicate), S
 | Component | Notes |
 |---|---|
 | `AccountField` | `<details>` + labelled `<input list="account-labels" autocomplete="off">` + `<datalist id="account-labels">` (max 10, most recent first, user's own labels only, this broker) + help text + optional counter (Alpine length check). Django partial so htmx can swap it on validation failure. |
-| `Notice` | One component, variants `info`, `success`, `attention`. Icon + title + body + optional action row. `role="status"` for flash, hints and the stale notice. No `role="alert"` anywhere on these screens. Used for conflict banner, mismatch notice, failed notice, hint line, flash, stale notice. |
+| `Notice` | One component, variants `info`, `success`, `attention`. Icon + title + body + optional action row. `role="status"` for flash, hints and the stale notice. No `role="alert"` anywhere on these screens. Used for conflict banner, mismatch notice, failed notice, hint line, flash, stale notice. **Conflict and mismatch banners are `attention` variant + `info-circle` icon (ruled 2026-09-27, see 3.2)** — `attention` because there's an action to take, `info-circle` (never warning-triangle) for coach tone. Failed notice, plain hint and duplicates-only note stay `info`. |
 | `ImportSummary` | Counts row, hint line, failed notice. |
 | `ImportHeader` | Filename h1, upload time with zone, broker, Account line, Delete button. |
 | `StatusBadge` | Icon + text label, tokens per status. |
