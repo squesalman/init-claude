@@ -58,7 +58,13 @@ DEFAULT_SORT = "opened"
 
 def _user_trades(user):
     """Follow-ups row 27: derive_trades() needs (executed_at, id) order; id is file order, so
-    same-timestamp legs keep their entry-before-exit order. Do not drop the order_by."""
+    same-timestamp legs keep their entry-before-exit order. Do not drop the order_by.
+
+    ponytail: loads and matches every execution in Python on each request, no pagination.
+    Query count is constant, but memory/CPU are linear and unbounded. Add pagination or move
+    the aggregation to SQL past ~1,000 trades, or when the render-time budget in
+    docs/product/features/import-and-list.md section 6 is missed.
+    """
     return derive_trades(Execution.objects.for_user(user).order_by("executed_at", "id"))
 
 
@@ -182,6 +188,11 @@ def trades(request):
     sort, direction = _sort_params(request)
     show_account = len({t.account_label for t in derived}) >= 2
     zone = timezone.get_current_timezone_name()
+    # ponytail: slice 1 is USD-only (design doc); a non-USD closed trade would otherwise
+    # show as (n=0) on every card with no error. Warn instead of failing silently.
+    stats = compute_stats(derived)
+    if set(stats) - {"USD"}:
+        log.warning("non-USD closed trades present, not reflected in stat cards: %s", set(stats))
     context = {
         "trades": [_trade_row(t) for t in _sorted(derived, sort, direction)],
         "sort": sort,
@@ -193,12 +204,15 @@ def trades(request):
         "times_in": copy.TIMES_IN.format(zone=zone),
         "sort_value": f"{sort}_{direction}",
         "copy": copy,
-        "cards": _cards(compute_stats(derived).get("USD")) if derived else None,
+        "cards": _cards(stats.get("USD")) if derived else None,
         "calc_summary": copy.CALC_SUMMARY,
         "calc_items": [
             copy.CALC_WIN_RATE, copy.CALC_TOTAL_PNL, copy.CALC_AVG_R,
             copy.CALC_TIMES.format(zone=zone),
         ],
+        # Kept explicit (not just relying on {% if %} treating a missing key as falsy):
+        # test_state_c_only_open_trades_shows_table_and_n0_cards asserts these are None via
+        # direct context access, which raises KeyError on a genuinely missing key.
         "empty_heading": None,
         "empty_body": None,
         "empty_action": None,
@@ -224,6 +238,7 @@ def _batch_label(user):
     return Subquery(
         Execution.objects.for_user(user)
         .filter(raw_import_row__import_batch=OuterRef("pk"))
+        .order_by("pk")
         .values("broker_account_label")[:1]
     )
 
@@ -594,6 +609,11 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
     )
     totals = entries.aggregate(n=Count("pk"), m=Count("pk", filter=~Q(note="")))
     n, m = totals["n"], totals["m"]
+    # Trust boundary for the stale-count guard: a client-posted journal_count has no upper
+    # bound, so an inflated POST value would make delete_import_batch's "n > confirmed"
+    # check never fire. Stash the count actually shown on *this* render in the session,
+    # keyed by batch, and read that back at POST time instead of the client's own field.
+    request.session[_shown_key(batch.pk)] = n
     listed = entries.select_related("opening_execution").order_by(
         "opening_execution__executed_at", "pk"
     )
@@ -622,6 +642,7 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
             for e in listed
         ],
         "show_all_url": show_all_url,
+        "show_all_text": import_copy.DELETE_SHOW_ALL.format(n=n) if show_all_url else None,
         "body": _body(trade_count, other_rows, n),
         "journal_body": _journal_body(n, m),
         "checkbox_label": import_copy.DELETE_CHECKBOX.format(
@@ -638,13 +659,12 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
     }
 
 
-def _journal_count(value) -> int:
-    """The count the user was shown. Anything unparseable counts as 0, which is safe: a
-    lower count can only make the delete refuse (stale), never delete more."""
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return 0
+def _shown_key(pk) -> str:
+    """Session key for the journal-entry count last shown to this user for this batch's
+    confirm dialog (see _delete_context). Never read the client's own journal_count POST
+    field for the StaleConfirm comparison — that value has no upper bound and an inflated
+    claim would make delete_import_batch's check never fire."""
+    return f"delete_shown_{pk}"
 
 
 def _deleted_flash(result, from_banner) -> str:
@@ -670,7 +690,7 @@ def import_delete(request, pk):
     from_banner = source.get("from") == "banner"
     notice = None
     if request.method == "POST":
-        shown = _journal_count(request.POST.get("journal_count"))
+        shown = request.session.get(_shown_key(pk), 0)  # trusted; see _delete_context
         ticked = request.POST.get("confirm") == "on"
         if shown and not ticked:
             notice = import_copy.DELETE_NOT_TICKED  # the server enforces the box too

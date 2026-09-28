@@ -119,6 +119,7 @@ def test_1_delete_removes_the_batch_its_rows_and_executions_and_nothing_else(log
 def test_2_journaled_batch_without_the_tick_deletes_nothing(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1, T2))
     journal(user, batch, note="waited for the retest")
+    logged_in.get(confirm_url(batch.pk))  # seeds the session-confirmed count (see test_4b)
     before = snapshot()
 
     resp = post_delete(logged_in, batch.pk, count=1, tick=False)
@@ -132,6 +133,7 @@ def test_2_journaled_batch_without_the_tick_deletes_nothing(logged_in, user):
 def test_3_tick_and_correct_count_deletes_the_journal_entries_too(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1, T2))
     entries = journal(user, batch, note="a note", n=2)
+    logged_in.get(confirm_url(batch.pk))  # seeds the session-confirmed count (see test_4b)
 
     resp = post_delete(logged_in, batch.pk, count=2, tick=True)
 
@@ -166,6 +168,37 @@ def test_4_service_rolls_back_the_journal_delete_on_a_stale_count(logged_in, use
         delete_import_batch(user, batch.pk, confirmed_journal_count=1)
 
     assert snapshot() == before
+
+
+def test_4b_inflated_posted_count_cannot_bypass_the_stale_check(logged_in, user):
+    """Code review finding: a client-forged journal_count with no upper bound used to make
+    'n > confirmed' never fire. The view now reads the confirmed count from the session (set
+    by the last GET's _delete_context), never from the client's own POST field, so an
+    inflated claim buys nothing."""
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    journal(user, batch, n=1)
+    assert logged_in.get(confirm_url(batch.pk)).context["journal_count"] == 1  # stashes shown=1
+    journal(user, batch, n=1)  # journaled in another tab after the dialog opened; real=2
+    before = snapshot()
+
+    resp = post_delete(logged_in, batch.pk, count=999999, tick=True)
+
+    assert resp.status_code == 200
+    assert snapshot() == before
+    assert resp.context["notice"] == copy.DELETE_STALE
+
+
+def test_4c_honest_posted_count_still_deletes_normally(logged_in, user):
+    """Regression guard for the fix above: a client that posts back the count it was
+    actually shown (the ordinary, non-adversarial case) is unaffected."""
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    entries = journal(user, batch, n=2)
+    logged_in.get(confirm_url(batch.pk))
+
+    resp = post_delete(logged_in, batch.pk, count=2, tick=True)
+
+    assert resp.status_code == 302
+    assert not JournalEntry.unscoped.filter(pk__in=[e.pk for e in entries]).exists()
 
 
 def test_5_isolation_other_user_gets_404_and_nothing_changes(logged_in, user, other):
@@ -341,15 +374,23 @@ def test_someone_elses_deleted_or_unknown_id_is_still_404(logged_in, other):
         assert post_delete(c, pk).status_code == 404
 
 
-def test_tampered_journal_count_is_treated_as_zero(logged_in, user):
+def test_tampered_journal_count_field_is_ignored_not_parsed(logged_in, user):
+    """The client's own journal_count field is never read for the security check (see
+    test_4b): a POST with no prior GET has no session-confirmed count, so it always refuses
+    first, regardless of what the (now-irrelevant) field says. A fresh client per value: the
+    first refusal's own re-render seeds *that* session with the real (unchanged) count, so a
+    second POST on the *same* session would legitimately succeed next (self-heals, test_4b's
+    point) rather than staying stale forever — this test is only about the very first look."""
     batch = uploaded(logged_in, csv_bytes(T1))
     journal(user, batch)
     before = snapshot()
 
-    for bad in ("abc", "-5", ""):
-        resp = logged_in.post(confirm_url(batch.pk), {"journal_count": bad, "confirm": "on"})
+    for bad in ("abc", "-5", "", "999999"):
+        c = Client()
+        c.force_login(user)
+        resp = c.post(confirm_url(batch.pk), {"journal_count": bad, "confirm": "on"})
         assert resp.status_code == 200 and resp.context["notice"] == copy.DELETE_STALE
-    assert snapshot() == before
+        assert snapshot() == before
 
 
 def test_login_required(client, user):

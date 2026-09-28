@@ -146,6 +146,30 @@ def test_state_c_only_open_trades_shows_table_and_n0_cards(logged_in, user):
     assert cards["avg_r"]["value"] == "— (n=0)" and cards["avg_r"]["help"] == copy.AVG_R_HELP
 
 
+def test_non_usd_closed_trade_logs_a_warning_instead_of_silently_dropping_from_the_cards(
+    logged_in, user, caplog
+):
+    """Code review finding: the cards read compute_stats(...).get("USD") only, so a non-USD
+    closed trade would show n=0 everywhere while the table still lists it, with no error.
+    Slice 1 is USD-only (design doc), so this is latent, but it must not fail silently."""
+    eur_at = T0 + timedelta(hours=1)
+    Execution.unscoped.bulk_create([
+        Execution(
+            user=user, broker="topstep", broker_trade_id="eur-1", broker_account_label="",
+            symbol="6EZ6", side=side, quantity=Decimal(1), price=Decimal(px), currency="EUR",
+            executed_at=at, source=Execution.SOURCE_MANUAL,
+        )
+        for side, px, at in (("buy", "100", eur_at), ("sell", "101", eur_at + timedelta(minutes=1)))
+    ])
+
+    with caplog.at_level("WARNING", logger="journal.views"):
+        c = ctx(logged_in)
+
+    assert [t["symbol"] for t in c["trades"]] == ["6EZ6"]
+    assert c["cards"]["total_pnl"]["value"] == "— (n=0)"  # still no EUR card: slice 1 is USD-only
+    assert any("non-USD" in r.getMessage() for r in caplog.records)
+
+
 # --- stat cards (section 3, AC 17-23) -------------------------------------------------------
 
 

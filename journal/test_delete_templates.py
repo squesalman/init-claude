@@ -12,6 +12,7 @@ from django.contrib.auth import get_user_model
 
 from config.test_pages import Doc, assert_every_input_is_labelled
 from journal import copy
+from journal.models import JournalEntry
 from journal.test_delete_views import confirm_url, journal, post_delete, rows
 from journal.test_import_views import T1, T1_CHANGED, T2, T3, csv_bytes, detail, uploaded
 
@@ -120,12 +121,31 @@ def test_more_than_20_entries_offer_show_all(logged_in, user):
 def test_not_ticked_notice_sits_above_the_box_and_focuses_it(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1))
     journal(user, batch)
+    logged_in.get(confirm_url(batch.pk))  # seeds the session-confirmed count the POST checks
     markup = body(post_delete(logged_in, batch.pk, count=1, headers=HTMX))
     d = Doc(markup)
     assert d.one("input", type="checkbox")["autofocus"] == ""
     notice = markup.index(copy.DELETE_NOT_TICKED)
     assert notice < markup.index('type="checkbox"')
     assert 'role="status"' in markup[markup.rindex("<p ", 0, notice):notice]
+
+
+def test_not_ticked_notice_is_not_shown_when_the_entries_vanished_before_the_post(
+    logged_in, user
+):
+    """Code review finding: if the journal entries are deleted between the GET and this POST,
+    the (session) shown-count is still truthy so 'tick the box' is set, but the fresh read
+    finds nothing to confirm and renders no checkbox: a notice pointing at a box that isn't
+    there. The notice is now gated on the box existing."""
+    batch = uploaded(logged_in, csv_bytes(T1))
+    entries = journal(user, batch)
+    logged_in.get(confirm_url(batch.pk))  # shown = 1 is stashed in the session
+    JournalEntry.unscoped.filter(pk__in=[e.pk for e in entries]).delete()  # gone in another tab
+
+    markup = body(post_delete(logged_in, batch.pk, count=1, headers=HTMX))
+
+    assert copy.DELETE_NOT_TICKED not in markup
+    assert 'type="checkbox"' not in markup
 
 
 def test_stale_notice_is_on_top_focused_and_the_box_is_unticked(logged_in, user):

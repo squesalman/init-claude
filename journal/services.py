@@ -124,7 +124,11 @@ class DeleteResult:
 
 def delete_import_batch(user, batch_id, confirmed_journal_count: int) -> DeleteResult:
     """ADR-0005 section 3. Raises ImportBatch.DoesNotExist for a missing or someone else's
-    id, StaleConfirm (all rolled back) if more journal entries exist than were confirmed."""
+    id, StaleConfirm (all rolled back) if more journal entries exist than were confirmed.
+
+    confirmed_journal_count must come from a source the caller trusts (see the view: it is
+    read from the server-side session, not the client-posted form field, so an inflated
+    client value can't make this check (n > confirmed) fail to fire)."""
     with transaction.atomic():
         batch = ImportBatch.objects.for_user(user).defer("raw_file").get(pk=batch_id)
         execs = Execution.objects.for_user(user).filter(raw_import_row__import_batch=batch)

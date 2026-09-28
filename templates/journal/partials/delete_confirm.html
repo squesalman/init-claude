@@ -27,8 +27,7 @@
         {% endfor %}
       </ul>
     </div>
-    {# DELETE_SHOW_ALL is "Show all {n}": templates cannot .format(), so the count is appended. #}
-    {% if show_all_url %}<p class="mt-2"><a href="{{ show_all_url }}"{% if not page %} hx-get="{{ show_all_url }}" hx-target="#delete-confirm" hx-swap="outerHTML"{% endif %} class="btn-secondary">{{ copy.DELETE_SHOW_ALL|cut:"{n}" }}{{ journal_count }}</a></p>{% endif %}
+    {% if show_all_url %}<p class="mt-2"><a href="{{ show_all_url }}"{% if not page %} hx-get="{{ show_all_url }}" hx-target="#delete-confirm" hx-swap="outerHTML"{% endif %} class="btn-secondary">{{ show_all_text }}</a></p>{% endif %}
     <p class="mt-2 text-text-muted">{{ copy.DELETE_LIST_HELPER }}</p>
   </div>
   {% endif %}
@@ -39,7 +38,7 @@
     {% csrf_token %}
     <input type="hidden" name="journal_count" value="{{ journal_count }}">
     {% if from_banner %}<input type="hidden" name="from" value="banner">{% endif %}
-    {% if notice == not_ticked %}
+    {% if notice == not_ticked and checkbox_label %}
     <p role="status" tabindex="-1" class="flex items-start gap-2 font-medium"{% if not checkbox_label %} autofocus{% endif %}><span class="text-info">{% include "partials/icon.html" with name="info" %}</span><span>{{ notice }}</span></p>
     {% endif %}
     {% if checkbox_label %}
