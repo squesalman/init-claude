@@ -6,7 +6,7 @@
     <summary>{{ copy.ACCOUNT_SUMMARY }}</summary>
     <div class="field pb-1">
       <label for="{{ field.id_for_label }}" class="font-medium">{{ field.label }}</label>
-      <input type="text" name="{{ field.html_name }}" id="{{ field.id_for_label }}" value="{{ field.value|default_if_none:'' }}" list="account-labels" autocomplete="off" placeholder="{{ account_placeholder }}" aria-describedby="{% if field.errors %}{{ field.auto_id }}_error {% endif %}{{ field.auto_id }}_count {{ field.auto_id }}_helptext"{% if field.errors %} aria-invalid="true" data-focus-after-swap{% endif %} x-ref="input" x-on:input="update" x-on:blur="announce">
+      <input type="text" name="{{ field.html_name }}" id="{{ field.id_for_label }}" value="{{ field.value|default_if_none:'' }}" list="account-labels" autocomplete="off" placeholder="{{ account_placeholder }}" aria-describedby="{% if field.errors %}{{ field.auto_id }}_error {% endif %}{{ field.auto_id }}_count {{ field.auto_id }}_helptext"{% if field.errors %} aria-invalid="true" data-focus-after-swap{% endif %} x-ref="input" x-on:input="update" x-on:blur="announce"{% if focus_account %} autofocus{% endif %}>
       <datalist id="account-labels">{% for label in account_labels %}<option value="{{ label }}">{% endfor %}</datalist>
       {% include "partials/field_errors.html" %}
       <p id="{{ field.auto_id }}_count" class="mt-1 tabular-nums text-text-muted empty:hidden" x-text="counter"></p>

@@ -71,25 +71,26 @@ def status_notice(resp, message):
 
 
 DETAIL = "import-detail"  # stands in for /imports/<pk>/ of a batch made on the fly
+DELETE = "import-delete"  # and /imports/<pk>/delete/ (the no-JS confirm page)
 
 
 def get_page(client, user, path):
-    if path in ("/trades/", "/imports/", DETAIL):
+    if path in ("/trades/", "/imports/", DETAIL, DELETE):
         client.force_login(user)
-    if path == DETAIL:
+    if path in (DETAIL, DELETE):
         from journal.models import ImportBatch
 
         batch = ImportBatch.objects.create(
             user=user, broker="topstep", filename="f.csv", file_sha256="0" * 64, raw_file=b""
         )
-        path = f"/imports/{batch.pk}/"
+        path = f"/imports/{batch.pk}/" + ("delete/" if path == DELETE else "")
     return client.get(path)
 
 
 # --- shell (section 3) ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/login/", "/signup/", "/trades/", "/imports/", DETAIL])
+@pytest.mark.parametrize("path", ["/login/", "/signup/", "/trades/", "/imports/", DETAIL, DELETE])
 def test_every_page_has_the_shell_basics(client, user, path):
     resp = get_page(client, user, path)
     assert resp.status_code == 200

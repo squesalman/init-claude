@@ -1,0 +1,62 @@
+{# ConfirmDialog body (design import-account-label 3.3, 5, 6, 7; ADR-0005). Swapped into #delete-dialog-body by htmx; import_delete.html renders the same body as the no-JS page (page=True: h1, plain form, no htmx). Variants from _delete_context: simple (no journal entries), two-step (list + required tick), no trades (body text only). All texts are finished strings from the view; autoescape only. #}
+{# Focus (design 3.3, 7): not-ticked -> the box; stale/failed -> the notice; two-step -> the title; simple -> Cancel. Never Delete. htmx and showModal() both honour autofocus. #}
+{% load tz %}{% get_current_timezone as tz %}
+{% with not_ticked=copy.DELETE_NOT_TICKED %}
+<div id="delete-confirm" class="space-y-4 p-4 sm:p-6" x-data="deleteConfirm" data-live-on="{{ copy.DELETE_LIVE_ENABLED }}" data-live-off="{{ copy.DELETE_LIVE_DISABLED }}">
+  {% with h=page|yesno:"h1,h2" %}<{{ h }} id="delete-title" tabindex="-1" class="pr-10 text-title font-semibold"{% if journal_count and not notice %} autofocus{% endif %}>{{ copy.DELETE_TITLE }}</{{ h }}>{% endwith %}
+  {% if notice and notice != not_ticked %}
+  <p id="delete-notice" role="status" tabindex="-1" autofocus class="flex items-start gap-3 rounded border-l-4 border-info bg-info-bg p-3 font-medium"><span class="mt-0.5 text-info">{% include "partials/icon.html" with name="info" %}</span><span>{{ notice }}</span></p>
+  {% endif %}
+  <div>
+    <p class="break-all font-medium">{{ batch.filename }}</p>
+    <p class="text-text-muted">Uploaded {{ batch.uploaded_at|date:"M j, Y, g:i A" }} ({{ tz }}) · <span class="break-words">{{ account_line }}</span></p>
+  </div>
+  <p id="delete-desc">{{ body }}</p>
+  {% if journal_body %}
+  <p>{{ journal_body }}</p>
+  <div>
+    <h3 class="font-semibold">{{ copy.DELETE_LIST_HEADING }}</h3>
+    <div role="region" tabindex="0" aria-label="{{ copy.DELETE_LIST_HEADING }}" class="mt-2 max-h-[40vh] overflow-y-auto rounded border border-border">
+      <ul class="divide-y divide-border">
+        {% for entry in journal_list %}
+        <li class="p-3">
+          <p class="flex flex-wrap gap-x-4 gap-y-1"><span class="font-medium">{{ entry.symbol }}</span><span>{{ entry.opened_at|date:"M j, g:i A" }}</span><span class="badge font-normal">{% if entry.rules == copy.RULES_FOLLOWED %}{% include "partials/icon.html" with name="success" %}{% elif entry.rules == copy.RULES_NOT_FOLLOWED %}{% include "partials/icon.html" with name="failed" %}{% else %}{% include "partials/icon.html" with name="skip" %}{% endif %}<span>Rules: {{ entry.rules }}</span></span></p>
+          {# "View trade" (new tab) lands with the trade page; entry.url is always None until then. #}
+          {% if entry.note %}<p class="mt-1 break-words">“{{ entry.note }}”</p>{% else %}<p class="mt-1 text-text-muted">{{ copy.DELETE_NO_NOTE }}</p>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {# DELETE_SHOW_ALL is "Show all {n}": templates cannot .format(), so the count is appended. #}
+    {% if show_all_url %}<p class="mt-2"><a href="{{ show_all_url }}"{% if not page %} hx-get="{{ show_all_url }}" hx-target="#delete-confirm" hx-swap="outerHTML"{% endif %} class="btn-secondary">{{ copy.DELETE_SHOW_ALL|cut:"{n}" }}{{ journal_count }}</a></p>{% endif %}
+    <p class="mt-2 text-text-muted">{{ copy.DELETE_LIST_HELPER }}</p>
+  </div>
+  {% endif %}
+  {% if reupload_line %}<p>{{ reupload_line }}</p>{% endif %}
+  {% if not checkbox_label %}<p>{{ copy.DELETE_PERMANENT }}</p>{% endif %}
+
+  <form method="post" action="{% url 'import_delete' batch.pk %}"{% if not page %} hx-post="{% url 'import_delete' batch.pk %}" hx-target="#delete-confirm" hx-swap="outerHTML"{% endif %} class="space-y-4">
+    {% csrf_token %}
+    <input type="hidden" name="journal_count" value="{{ journal_count }}">
+    {% if from_banner %}<input type="hidden" name="from" value="banner">{% endif %}
+    {% if notice == not_ticked %}
+    <p role="status" tabindex="-1" class="flex items-start gap-2 font-medium"{% if not checkbox_label %} autofocus{% endif %}><span class="text-info">{% include "partials/icon.html" with name="info" %}</span><span>{{ notice }}</span></p>
+    {% endif %}
+    {% if checkbox_label %}
+    <label for="delete-tick" class="flex min-h-[44px] cursor-pointer items-start gap-3">
+      <input type="checkbox" id="delete-tick" name="confirm" value="on" class="mt-0.5 h-5 w-5 shrink-0" x-ref="tick" x-on:change="toggle" x-on:keydown.enter.prevent="hold"{% if notice == not_ticked %} autofocus{% elif notice == copy.DELETE_FAILED and request.POST.confirm == "on" %} checked{% endif %}>
+      <span>{{ checkbox_label }}</span>
+    </label>
+    {% endif %}
+    <p role="status" class="sr-only" x-text="live"></p>
+    {# Shown by static/js/app.js when the POST gets no page back (5xx, network). #}
+    <div role="status" data-request-error="{{ copy.DELETE_FAILED }}">
+      <p class="flex items-start gap-2 font-medium" hidden><span class="text-info">{% include "partials/icon.html" with name="info" %}</span><span data-request-error-text></span></p>
+    </div>
+    <div class="flex flex-col gap-3 sm:flex-row sm:justify-end">
+      <a href="{% url 'import_detail' batch.pk %}" data-cancel class="btn-secondary"{% if not notice and not journal_count %} autofocus{% endif %}>{{ copy.DELETE_CANCEL }}</a>
+      <button type="submit" class="btn-danger" data-busy="{{ copy.DELETE_BUSY }}" x-bind:disabled="locked">{{ delete_button }}</button>
+    </div>
+  </form>
+</div>
+{% endwith %}

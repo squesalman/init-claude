@@ -5,8 +5,8 @@ from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import DatabaseError
 from django.db.models import Case, Count, Exists, Max, OuterRef, Q, Subquery, Value, When
-from django.http import HttpResponse
-from django.shortcuts import get_object_or_404, redirect, render
+from django.http import Http404, HttpResponse
+from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import dateformat, timezone
 from django.utils.cache import patch_vary_headers
@@ -18,8 +18,15 @@ from journal import copy as import_copy
 from journal.decorators import htmx_login_required, is_htmx
 from journal.forms import UploadForm, safe_filename
 from journal.importers.topstep import ImportFileError, parse_timestamp
-from journal.models import Execution, ImportBatch, RawImportRow
-from journal.services import BROKER, TRY_AGAIN, ImportRetryError, import_file
+from journal.models import Execution, ImportBatch, JournalEntry, RawImportRow
+from journal.services import (
+    BROKER,
+    TRY_AGAIN,
+    ImportRetryError,
+    StaleConfirm,
+    delete_import_batch,
+    import_file,
+)
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +40,8 @@ DUPLICATE = RawImportRow.STATUS_SKIPPED_DUPLICATE
 CONFLICT = RawImportRow.STATUS_SKIPPED_CONFLICT
 FAILED = RawImportRow.STATUS_FAILED
 STATUSES = (IMPORTED, DUPLICATE, CONFLICT, FAILED)
+JOURNAL_PREVIEW = 20  # design 3.3: first 20 entries, then "Show all"
+DELETED_KEY = "deleted_imports"  # session: ids this user deleted, for the "already deleted" flash
 
 
 @never_cache  # back button after logout must not show trade data
@@ -107,12 +116,7 @@ def imports(request):
                 form.add_error(None, TRY_AGAIN)
             else:
                 messages.success(request, import_copy.UPLOAD_DONE)
-                url = reverse("import_detail", args=[batch.pk])
-                if htmx:
-                    response = HttpResponse()
-                    response["HX-Redirect"] = url
-                    return response
-                return redirect(url)
+                return _redirect(request, reverse("import_detail", args=[batch.pk]))
         if htmx and set(form.errors) == {"account"}:
             # Swap only the Account field, so the chosen file stays selected (design Q G).
             return render(request, "journal/partials/account_field.html", _form_context(user, form))
@@ -134,9 +138,12 @@ def imports(request):
     page.object_list = list(page.object_list)
     for batch in page.object_list:
         batch.needs_attention = batch.failed_count > 0 or batch.has_conflicts
-    response = render(
-        request, "journal/import_list.html", {**_form_context(user, form), "page_obj": page}
-    )
+    context = {**_form_context(user, form), "page_obj": page}
+    # Design 1 and 3.4: after a delete the Account field is open; focused only from a banner.
+    arrived_from = request.GET.get("from")
+    context["account_open"] = context["account_open"] or arrived_from in ("delete", "banner")
+    context["focus_account"] = arrived_from == "banner"
+    response = render(request, "journal/import_list.html", context)
     if htmx and request.method == "POST":
         # Any other upload problem re-renders the whole page (the file must be re-picked).
         response["HX-Retarget"] = "body"
@@ -264,7 +271,10 @@ def _hint(user, batch, label) -> dict | None:
 @htmx_login_required
 def import_detail(request, pk):
     user = request.user
-    batch = get_object_or_404(ImportBatch.objects.for_user(user).defer("raw_file"), pk=pk)
+    try:
+        batch = ImportBatch.objects.for_user(user).defer("raw_file").get(pk=pk)
+    except ImportBatch.DoesNotExist:
+        return _gone(request, pk, import_copy.DELETED_BEFORE)
     rows = RawImportRow.objects.for_user(user).filter(import_batch=batch)
 
     by_status = dict(rows.values_list("status").annotate(n=Count("pk")).order_by())
@@ -273,14 +283,7 @@ def import_detail(request, pk):
     counts[NEEDS_ATTENTION] = counts[CONFLICT] + counts[FAILED]
     counts[ALL] = sum(by_status.values())
 
-    label = None
-    if counts[IMPORTED]:
-        label = (
-            Execution.objects.for_user(user)
-            .filter(raw_import_row__import_batch=batch)
-            .values_list("broker_account_label", flat=True)
-            .first()
-        )
+    label = _label_of(user, batch) if counts[IMPORTED] else None
 
     values = ([NEEDS_ATTENTION] if counts[NEEDS_ATTENTION] else []) + [ALL, *STATUSES]
     status = request.GET.get("status")
@@ -333,5 +336,209 @@ def import_detail(request, pk):
         "journal/import_detail.html"
     )
     response = render(request, template, context)
+    patch_vary_headers(response, ["HX-Request"])
+    return response
+
+
+def _redirect(request, url):
+    """PRG redirect; an htmx request gets HX-Redirect so the whole page navigates."""
+    if is_htmx(request):
+        response = HttpResponse()
+        response["HX-Redirect"] = url
+        return response
+    return redirect(url)
+
+
+def _label_of(user, batch) -> str | None:
+    """The batch's Account label, read from its executions (no label column, H1)."""
+    return (
+        Execution.objects.for_user(user)
+        .filter(raw_import_row__import_batch=batch)
+        .values_list("broker_account_label", flat=True)
+        .first()
+    )
+
+
+def _gone(request, pk, text):
+    """Design 3.3/3.4: an import this user deleted redirects with a flash. Any other missing
+    id, including someone else's, is a 404 identical to a missing id. Only this session's
+    deletes are remembered (no tombstones, ADR-0005 section 4), so another device gets 404."""
+    if pk not in request.session.get(DELETED_KEY, []):
+        raise Http404
+    messages.info(request, text)
+    return _redirect(request, reverse("imports"))
+
+
+def _plural(n, one, many) -> str:
+    return one if n == 1 else many.format(n=n)
+
+
+def _noted(m) -> str:
+    if m == 0:
+        return import_copy.NOTED_NONE
+    return _plural(m, import_copy.NOTED_ONE, import_copy.NOTED_MANY)
+
+
+_RULES = {
+    True: import_copy.RULES_FOLLOWED,
+    False: import_copy.RULES_NOT_FOLLOWED,
+    None: import_copy.RULES_NOT_ANSWERED,
+}
+
+
+def _reupload_line(user, batch) -> str | None:
+    """Design 3.3: a LATER upload of the same bytes that added nothing, so these trades
+    exist only through this batch."""
+    later = (
+        ImportBatch.objects.for_user(user)
+        .defer("raw_file")
+        .filter(file_sha256=batch.file_sha256, imported_count=0)
+        .filter(
+            Q(uploaded_at__gt=batch.uploaded_at)
+            | Q(uploaded_at=batch.uploaded_at, pk__gt=batch.pk)
+        )
+        .order_by("-uploaded_at", "-pk")
+        .first()
+    )
+    if later is None:
+        return None
+    date = dateformat.format(timezone.localtime(later.uploaded_at), "M j")
+    return import_copy.DELETE_REUPLOAD_LINE.format(date=date)
+
+
+def _body(trade_count, other_rows, n) -> str:
+    if trade_count == 0:
+        return import_copy.DELETE_BODY_NO_TRADES
+    trades = _plural(trade_count, import_copy.TRADES_ONE, import_copy.TRADES_MANY)
+    if n or not other_rows:  # variant 2 leads without the skipped-rows aside
+        return import_copy.DELETE_BODY.format(trades=trades)
+    if other_rows == 1:
+        return import_copy.DELETE_BODY_WITH_SKIPPED_ONE.format(trades=trades)
+    return import_copy.DELETE_BODY_WITH_SKIPPED.format(trades=trades, k=other_rows)
+
+
+def _journal_body(n, m) -> str | None:
+    if not n:
+        return None
+    if n == 1:
+        return import_copy.DELETE_JOURNAL_BODY_ONE.format(noted=_noted(m))
+    return import_copy.DELETE_JOURNAL_BODY_MANY.format(n=n, noted=_noted(m))
+
+
+def _delete_context(request, batch, notice, from_banner) -> dict:
+    """ADR-0005 section 5 inputs, all from scoped querysets, plus finished copy (design 5)."""
+    user = request.user
+    trade_count = batch.imported_count
+    other_rows = batch.row_count - trade_count
+    entries = JournalEntry.objects.for_user(user).filter(
+        opening_execution__raw_import_row__import_batch=batch
+    )
+    totals = entries.aggregate(n=Count("pk"), m=Count("pk", filter=~Q(note="")))
+    n, m = totals["n"], totals["m"]
+    listed = entries.select_related("opening_execution").order_by(
+        "opening_execution__executed_at", "pk"
+    )
+    show_all = request.GET.get("all") == "1"
+    if not show_all:
+        listed = listed[:JOURNAL_PREVIEW]
+    show_all_url = None
+    if not show_all and n > JOURNAL_PREVIEW:
+        query = {"all": 1, **({"from": "banner"} if from_banner else {})}
+        show_all_url = f"{reverse('import_delete', args=[batch.pk])}?{urlencode(query)}"
+    return {
+        "batch": batch,  # filename; uploaded_at renders in the active (user's) timezone
+        "account_line": _account_line(_label_of(user, batch) if trade_count else None),
+        "trade_count": trade_count,
+        "other_rows_count": other_rows,
+        "journal_count": n,  # the form posts this back as journal_count
+        "noted_count": m,
+        "journal_list": [
+            {
+                "symbol": e.opening_execution.symbol,
+                "opened_at": e.opening_execution.executed_at,
+                "rules": _RULES[e.rules_followed],
+                "note": _short(e.note, 80),  # "" means no written note
+                "url": None,  # no trade page yet (PR D)
+            }
+            for e in listed
+        ],
+        "show_all_url": show_all_url,
+        "body": _body(trade_count, other_rows, n),
+        "journal_body": _journal_body(n, m),
+        "checkbox_label": import_copy.DELETE_CHECKBOX.format(
+            entries=_plural(n, import_copy.ENTRIES_ONE, import_copy.ENTRIES_MANY),
+            noted=_noted(m),
+        ) if n else None,
+        "reupload_line": _reupload_line(user, batch) if trade_count else None,
+        "delete_button": (
+            import_copy.DELETE_BUTTON_WITH_ENTRIES if n else import_copy.DELETE_BUTTON
+        ),
+        "notice": notice,  # DELETE_NOT_TICKED | DELETE_STALE | DELETE_FAILED | None
+        "from_banner": from_banner,  # the form posts this back as from=banner
+        "copy": import_copy,
+    }
+
+
+def _journal_count(value) -> int:
+    """The count the user was shown. Anything unparseable counts as 0, which is safe: a
+    lower count can only make the delete refuse (stale), never delete more."""
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _deleted_flash(result, from_banner) -> str:
+    trades = _plural(result.trade_count, import_copy.TRADES_ONE, import_copy.TRADES_MANY)
+    if result.trade_count == 0:
+        text = import_copy.DELETED_NO_TRADES
+    elif result.journal_count:
+        entries = _plural(
+            result.journal_count, import_copy.ENTRIES_ONE, import_copy.ENTRIES_MANY
+        )
+        text = import_copy.DELETED_TRADES_AND_ENTRIES.format(trades=trades, entries=entries)
+    else:
+        text = import_copy.DELETED_TRADES.format(trades=trades)
+    return f"{text} {import_copy.DELETED_FROM_BANNER}" if from_banner else text
+
+
+@htmx_login_required
+def import_delete(request, pk):
+    """ADR-0005: GET renders the confirm and never deletes; POST deletes. htmx gets the
+    dialog body partial; without JS the same body renders as a full page."""
+    user = request.user
+    source = request.POST if request.method == "POST" else request.GET
+    from_banner = source.get("from") == "banner"
+    notice = None
+    if request.method == "POST":
+        shown = _journal_count(request.POST.get("journal_count"))
+        ticked = request.POST.get("confirm") == "on"
+        if shown and not ticked:
+            notice = import_copy.DELETE_NOT_TICKED  # the server enforces the box too
+        else:
+            try:
+                result = delete_import_batch(user, pk, confirmed_journal_count=shown)
+            except ImportBatch.DoesNotExist:
+                return _gone(request, pk, import_copy.DELETE_ALREADY_GONE)
+            except StaleConfirm:
+                notice = import_copy.DELETE_STALE
+            except DatabaseError as exc:
+                log.error("import delete failed: %s", type(exc).__name__)  # class only
+                notice = import_copy.DELETE_FAILED
+            else:
+                # ponytail: last 50 ids only; an older stale link just gets the 404.
+                deleted = request.session.get(DELETED_KEY, [])
+                request.session[DELETED_KEY] = [*deleted, pk][-50:]
+                messages.success(request, _deleted_flash(result, from_banner))
+                arrived = "banner" if from_banner else "delete"
+                return _redirect(request, f"{reverse('imports')}?from={arrived}")
+    try:
+        batch = ImportBatch.objects.for_user(user).defer("raw_file").get(pk=pk)
+    except ImportBatch.DoesNotExist:
+        return _gone(request, pk, import_copy.DELETE_ALREADY_GONE)
+    template = "journal/partials/delete_confirm.html" if is_htmx(request) else (
+        "journal/import_delete.html"
+    )
+    response = render(request, template, _delete_context(request, batch, notice, from_banner))
     patch_vary_headers(response, ["HX-Request"])
     return response

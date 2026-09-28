@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{# No-JS confirm page (design 3.3): the dialog body as a full page with a plain POST form. Reached by any "Delete this import" link without JS, or when the dialog body cannot be fetched. #}
+{% block title %}{{ copy.DELETE_TITLE }}{% endblock %}
+{% block width %}max-w-form{% endblock %}
+{% block content %}
+<div class="card p-0 sm:p-0">
+{% include "journal/partials/delete_confirm.html" with page=True %}
+</div>
+{% endblock %}

@@ -369,7 +369,9 @@ def test_conflict_banner_blank_label(logged_in, user):
     assert ctx["conflict_banner"] == {
         "title": copy.CONFLICT_TITLE_ONE, "body": copy.CONFLICT_BODY_BLANK,
     }
-    assert "Add an Account name and upload the file again." in copy.CONFLICT_BODY_BLANK
+    assert "Delete this import first, then upload again with an Account name" in (
+        copy.CONFLICT_BODY_BLANK
+    )
     assert ctx["counts"]["skipped_conflict"] == 1
     assert ctx["status"] == "needs_attention"
     assert ctx["account_line"] == copy.ACCOUNT_LINE_BLANK

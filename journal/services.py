@@ -2,14 +2,22 @@
 Topstep import write path, exactly ADR-0006 Decision 1: parse, one pre-fetch, classify
 (ADR-0004 section 2), then per-row create() inside one transaction. Model instances are
 passed, never *_id=, so the cross-tenant guard in UserOwned.save() costs no queries.
+Also the batch delete, ADR-0005 section 3.
 """
 
 import hashlib
+from dataclasses import dataclass
 
 from django.db import IntegrityError, transaction
 
 from journal.importers.topstep import ImportFileError, parse
-from journal.models import MAX_RAW_FILE_BYTES, Execution, ImportBatch, RawImportRow
+from journal.models import (
+    MAX_RAW_FILE_BYTES,
+    Execution,
+    ImportBatch,
+    JournalEntry,
+    RawImportRow,
+)
 
 BROKER = "topstep"
 _COMPARED = ("symbol", "side", "quantity", "price", "executed_at")  # fees left out on purpose
@@ -102,3 +110,27 @@ def _write(user, filename, file_bytes, label, parsed) -> ImportBatch:
                     source=Execution.SOURCE_IMPORT, raw_import_row=raw_row, **leg,
                 )
     return batch
+
+
+class StaleConfirm(Exception):
+    """More journal entries than the user confirmed would go; nothing was deleted."""
+
+
+@dataclass(frozen=True)
+class DeleteResult:
+    trade_count: int
+    journal_count: int
+
+
+def delete_import_batch(user, batch_id, confirmed_journal_count: int) -> DeleteResult:
+    """ADR-0005 section 3. Raises ImportBatch.DoesNotExist for a missing or someone else's
+    id, StaleConfirm (all rolled back) if more journal entries exist than were confirmed."""
+    with transaction.atomic():
+        batch = ImportBatch.objects.for_user(user).defer("raw_file").get(pk=batch_id)
+        execs = Execution.objects.for_user(user).filter(raw_import_row__import_batch=batch)
+        n, _ = JournalEntry.objects.for_user(user).filter(opening_execution__in=execs).delete()
+        if n > confirmed_journal_count:
+            raise StaleConfirm
+        execs.delete()
+        batch.delete()  # CASCADE raw rows; SET_NULL on execution is now a no-op
+    return DeleteResult(trade_count=batch.imported_count, journal_count=n)

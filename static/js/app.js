@@ -49,6 +49,69 @@ document.addEventListener("alpine:init", () => {
         : "";
     },
   }));
+
+  // ConfirmDialog tick gate (design 3.3, 4, 7): with journal entries the Delete button stays
+  // disabled until the box is ticked, and a polite region says when that changes. Without
+  // JS the button is enabled and the server refuses an unticked submit.
+  window.Alpine.data("deleteConfirm", () => ({
+    locked: false,
+    live: "",
+    init() {
+      const tick = this.$refs.tick;
+      this.locked = Boolean(tick) && !tick.checked;
+    },
+    toggle() {
+      this.locked = !this.$refs.tick.checked;
+      this.live = this.locked ? this.$root.dataset.liveOff : this.$root.dataset.liveOn;
+    },
+    hold() {}, // Enter on the box must not submit (x-on:keydown.enter.prevent)
+  }));
+});
+
+// ConfirmDialog open/close (design 3.3, 7). "Delete this import" links hx-get the body into
+// the page's <dialog>; it opens once the body is in (showModal focuses its [autofocus]).
+// Esc, Cancel and the close button close it; focus goes back to the control that opened it
+// (a row menu's button), or the page h1 if that control is gone.
+let dialogOpener = null;
+document.addEventListener("htmx:beforeRequest", (e) => {
+  const elt = e.detail.elt;
+  if (!elt.hasAttribute || !elt.hasAttribute("data-opens-dialog")) return;
+  const menu = elt.closest("details");
+  if (menu) menu.open = false;
+  dialogOpener = menu ? menu.querySelector("summary") : elt;
+});
+document.addEventListener("htmx:afterSwap", (e) => {
+  const dialog = e.detail.target.closest && e.detail.target.closest("dialog");
+  if (dialog && !dialog.open) dialog.showModal();
+});
+document.addEventListener("close", (e) => {
+  if (e.target.id !== "delete-dialog") return;
+  e.target.querySelector("#delete-dialog-body").replaceChildren();
+  (dialogOpener && dialogOpener.isConnected ? dialogOpener : document.querySelector("h1")).focus();
+  dialogOpener = null;
+}, true); // close does not bubble
+// The body could not be fetched: fall back to the no-JS confirm page.
+document.addEventListener("htmx:responseError", (e) => {
+  const elt = e.detail.elt;
+  if (elt.hasAttribute && elt.hasAttribute("data-opens-dialog")) window.location.href = elt.href;
+});
+
+document.addEventListener("click", (e) => {
+  // Cancel is a link back to the import (no-JS page); inside the dialog it just closes it.
+  const cancel = e.target.closest("[data-cancel]");
+  const dialog = cancel && cancel.closest("dialog");
+  if (dialog) { e.preventDefault(); dialog.close(); }
+  // RowActionsMenu (design 3.5, 7): a native <details> disclosure; a click outside closes it.
+  document.querySelectorAll("details[data-menu][open]").forEach((m) => { if (!m.contains(e.target)) m.open = false; });
+});
+document.addEventListener("keydown", (e) => {
+  const menu = e.key === "Escape" && e.target.closest && e.target.closest("details[data-menu][open]");
+  if (menu) { menu.open = false; menu.querySelector("summary").focus(); }
+});
+// Tab past the last item closes the menu.
+document.addEventListener("focusout", (e) => {
+  const menu = e.target.closest && e.target.closest("details[data-menu][open]");
+  if (menu && !menu.contains(e.relatedTarget)) menu.open = false;
 });
 
 // htmx request lifecycle: aria-busy on the region being replaced, the polite
