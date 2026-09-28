@@ -1,10 +1,10 @@
 # Build plan
 
-Owner: orchestrator. Living doc. Last updated 2026-09-27. Source of truth for *what is next*; decisions live in the ADRs, follow-ups in `docs/data/follow-ups.md`.
+Owner: orchestrator. Living doc. Last updated 2026-09-28. Source of truth for *what is next*; decisions live in the ADRs, follow-ups in `docs/data/follow-ups.md`.
 
 ## Where we are
-- Merged: Django skeleton + schema (PR #1), tenant-scoped form tripwire (PR #2), Topstep dedupe migration (PR #3), auth + `UserScopedModelForm` + styled shell (PR #4), ruff lint (PR #5), Topstep importer + FIFO matcher + stats + `no-store` middleware (PR #6, merged 2026-09-27). 356 tests pass. No `/imports/` or trades list UI yet.
-- Accepted: ADR-0002 to ADR-0006, domain specs, upload/`/imports` design, slice spec, auth/list design.
+- Merged: Django skeleton + schema (PR #1), tenant-scoped form tripwire (PR #2), Topstep dedupe migration (PR #3), auth + `UserScopedModelForm` + styled shell (PR #4), ruff lint (PR #5), Topstep importer + FIFO matcher + stats + `no-store` middleware (PR #6, merged 2026-09-27), import UI read side — upload, `/imports/` list, import detail (PR #7 / PR C1, merged 2026-09-28). 555 tests pass. No delete-import UI and no `/trades/` list UI yet.
+- Accepted: ADR-0002 to ADR-0006 (Decision 2 amended 2026-09-27), domain specs, upload/`/imports` design (rulings added 2026-09-27), slice spec, auth/list design.
 - Final for build: `product/features/import-and-list.md` (behavior, stat card strings) and `design/auth-and-trades-list.md` (layout and copy, single source). Conflicts between them were ruled on 2026-09-26.
 
 ## Done
@@ -12,6 +12,7 @@ Owner: orchestrator. Living doc. Last updated 2026-09-27. Source of truth for *w
 - **Phase 1 design step:** slice spec, auth/list design, ADR-0006 (Accepted).
 - **PR A (auth), PR #4:** signup (time zone, confirm password), login, logout, `/trades/` placeholder, `UserScopedModelForm` + banned-pattern tests, Tailwind standalone shell, 403/500. Security review (no High), QA (131 cases), code-review and ponytail-review findings applied; checked by hand in Firefox.
 - **PR A2 (lint), PR #5:** ruff, lint only.
+- **PR C1 (import UI, read side), PR #7:** upload form (Account datalist, htmx fragment swap on error), `/imports/` list (25/page, defers `raw_file`), import detail (filters, paging, conflict/mismatch banners, timezone display), htmx 2.0.11 + Alpine CSP 3.17.4 vendored, Tailwind rebuilt via WSL. Code-review (4 findings) and ponytail-review (6 findings, net -32 lines) applied and verified. Delete flow deferred to PR C2.
 
 ## Rulings (2026-09-26)
 - R-multiple: `planned_risk_amount` wins over `stop_price`; no fallback if planned risk is unusable. Keep all 3 columns.
@@ -22,13 +23,13 @@ Owner: orchestrator. Living doc. Last updated 2026-09-27. Source of truth for *w
 - ADR-0006: importer uses per-row `create()` in one transaction; forms use `UserScopedModelForm`.
 
 ## Start here (next session)
-Next task is **PR C** (import UI). Row 19 is done (PR #6). Read in order: `CLAUDE.md`, `docs/README.md`, this file, ADR-0005, ADR-0006 (Decision 2 amended 2026-09-27), `docs/design/import-account-label.md`, `docs/data/follow-ups.md` rows 22-27 (PR C security checklist is row 24). Before the upload view: append every new authenticated URL to `AUTHENTICATED_URLS` in `config/test_cache_headers.py`. Dev setup: an `.env` copied before 2026-09-27 needs `POSTGRES_HOST=127.0.0.1` (not `localhost`, follow-ups row 23); `.env.example` is fixed. Test vectors are synthetic; the real CSV (`docs/all_trades_export.csv`, git-ignored) stays out of git.
+Next task is **PR C2** (delete-import flow, ADR-0005) or **PR D** (`/trades/` list + 3 stat cards) — orchestrator's call on order. Read in order: `CLAUDE.md`, `docs/README.md`, this file, ADR-0005 (for C2) or `docs/domain/topstep-import.md` + follow-ups row 27 (for D, execution ordering), `docs/data/follow-ups.md` rows 20/24/28 (open items from PR C1: signup.html inline script, delete + rate limit + Caddy cap, provisional `UPLOAD_ERROR` copy). Dev setup: an `.env` copied before 2026-09-27 needs `POSTGRES_HOST=127.0.0.1` (not `localhost`, follow-ups row 23); `.env.example` is fixed. Test vectors are synthetic; the real CSV (`docs/all_trades_export.csv`, git-ignored) stays out of git.
 
 ## Remaining work (one branch + worktree + PR per code task, TDD, tests stay in repo)
 Merge order:
 1. **PR B, importer + matcher + stats (backend only): DONE, PR #6 merged 2026-09-27.** Parser, `import_file()`, `derive_trades()`, win rate / total P&L, avg R stubbed at n=0 until journaling. QA (vectors hand-computed) and security review done; findings fixed. Real 177-row export checked locally (counts only): 177 imported, re-import all `skipped_duplicate`.
-2. **PR C, import UI:** upload form with Account field, `/imports/` list + detail, delete with counted tick box (ADR-0005; its 7 tests first).
-3. **PR D, `/trades/` list + 3 stat cards.**
+2. **PR C, import UI.** ~~C1, upload form with Account field, `/imports/` list + detail: DONE, PR #7 merged 2026-09-28.~~ **C2, delete with counted tick box (ADR-0005; its 7 tests first): not started.**
+3. **PR D, `/trades/` list + 3 stat cards.** Order executions by `(executed_at, id)` in the read path (follow-ups row 27).
 
 After each PR: `qa-engineer` against the acceptance criteria and vectors; `security-reviewer` after C (uploads, delete) and after any auth change; `code-review` before merge; only the orchestrator merges.
 
