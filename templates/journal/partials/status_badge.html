@@ -1,0 +1,4 @@
+{# StatusBadge (design 5, 6): icon plus text, never color alone. Conflict uses info on purpose (coach tone). #}{% if status == "imported" %}<span class="badge badge-imported">{% include "partials/icon.html" with name="success" %}<span>{{ label }}</span></span>
+{% elif status == "skipped_duplicate" %}<span class="badge badge-duplicate">{% include "partials/icon.html" with name="skip" %}<span>{{ label }}</span></span>
+{% elif status == "skipped_conflict" %}<span class="badge badge-conflict">{% include "partials/icon.html" with name="info" %}<span>{{ label }}</span></span>
+{% else %}<span class="badge badge-failed">{% include "partials/icon.html" with name="failed" %}<span>{{ label }}</span></span>{% endif %}

@@ -1,0 +1,18 @@
+{# AccountField (design 3.1, 4, 6, 7). Swapped alone by htmx (outerHTML on #account-field) when the Account field is the only problem, so the chosen file stays selected. #}
+{# Alpine CSP build: x-* values name a property or method of Alpine.data("accountField") in static/js/app.js, never an expression. Labels are autoescaped option values only. #}
+{% with field=form.account %}
+<div id="account-field" x-data="accountField" data-limit="64" data-from="50" data-too-long="{{ copy.ACCOUNT_TOO_LONG }}">
+  <details id="account-details" class="disclosure"{% if account_open %} open{% endif %}>
+    <summary>{{ copy.ACCOUNT_SUMMARY }}</summary>
+    <div class="field pb-1">
+      <label for="{{ field.id_for_label }}" class="font-medium">{{ field.label }}</label>
+      <input type="text" name="{{ field.html_name }}" id="{{ field.id_for_label }}" value="{{ field.value|default_if_none:'' }}" list="account-labels" autocomplete="off" placeholder="{{ account_placeholder }}" aria-describedby="{% if field.errors %}{{ field.auto_id }}_error {% endif %}{{ field.auto_id }}_count {{ field.auto_id }}_helptext"{% if field.errors %} aria-invalid="true" data-focus-after-swap{% endif %} x-ref="input" x-on:input="update" x-on:blur="announce">
+      <datalist id="account-labels">{% for label in account_labels %}<option value="{{ label }}">{% endfor %}</datalist>
+      {% include "partials/field_errors.html" %}
+      <p id="{{ field.auto_id }}_count" class="mt-1 tabular-nums text-text-muted empty:hidden" x-text="counter"></p>
+      <p role="status" class="mt-1 font-medium empty:hidden" x-text="message"></p>
+      <p id="{{ field.auto_id }}_helptext" class="mt-1 text-text-muted">{{ field.help_text }}</p>
+    </div>
+  </details>
+</div>
+{% endwith %}

@@ -70,16 +70,26 @@ def status_notice(resp, message):
     return found.group(0)
 
 
+DETAIL = "import-detail"  # stands in for /imports/<pk>/ of a batch made on the fly
+
+
 def get_page(client, user, path):
-    if path == "/trades/":
+    if path in ("/trades/", "/imports/", DETAIL):
         client.force_login(user)
+    if path == DETAIL:
+        from journal.models import ImportBatch
+
+        batch = ImportBatch.objects.create(
+            user=user, broker="topstep", filename="f.csv", file_sha256="0" * 64, raw_file=b""
+        )
+        path = f"/imports/{batch.pk}/"
     return client.get(path)
 
 
 # --- shell (section 3) ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/login/", "/signup/", "/trades/"])
+@pytest.mark.parametrize("path", ["/login/", "/signup/", "/trades/", "/imports/", DETAIL])
 def test_every_page_has_the_shell_basics(client, user, path):
     resp = get_page(client, user, path)
     assert resp.status_code == 200

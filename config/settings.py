@@ -114,15 +114,23 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # First: refuses an oversized upload before CsrfViewMiddleware parses request.POST.
+    'config.middleware.RequestBodyLimitMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'config.middleware.NoStoreWhenAuthenticatedMiddleware',
+    'config.middleware.UserTimezoneMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+# Uploads (follow-ups row 24). Bodies over config.middleware.MAX_REQUEST_BYTES get a 413
+# first. (FILE_UPLOAD_MAX_MEMORY_SIZE is left at Django's own default: 2_621_440.)
+# The upload form takes exactly one file; a second file part is a 400.
+DATA_UPLOAD_MAX_NUMBER_FILES = 1
 
 ROOT_URLCONF = 'config.urls'
 

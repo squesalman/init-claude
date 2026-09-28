@@ -1,0 +1,58 @@
+{# RowTable + FilterTabs (design 3.2, 6, 7). Returned alone for an htmx filter/page request. Filters and pager are plain links (no-JS fallback); with JS, hx-get swaps this region and pushes the URL. Stable ids let htmx put focus back after the swap. #}
+{% load tz %}{% get_current_timezone as tz %}
+<div id="import-rows" class="mt-8" hx-target="this" hx-swap="outerHTML" hx-push-url="true" hx-indicator="this">
+  <h2 id="rows-heading" class="text-lg font-semibold">Rows</h2>
+  <ul class="mt-3 flex flex-wrap gap-2">
+    {% for f in filters %}
+    <li><a id="filter-{{ f.value }}" href="{{ f.url }}" hx-get="{{ f.url }}" class="filter-tab"{% if f.current %} aria-current="true" data-focus-after-swap{% endif %}>{{ f.label }} <span class="filter-count">{{ f.count }}</span></a></li>
+    {% endfor %}
+  </ul>
+
+  {% if rows %}
+  <div class="mt-4 hidden rounded-lg border border-border bg-surface md:block">
+  <table class="data-table">
+    <caption class="sr-only">Rows: {% for f in filters %}{% if f.current %}{{ f.label }}{% endif %}{% endfor %}</caption>
+    <thead>
+      <tr>
+        <th scope="col" class="num">Row</th>
+        <th scope="col">Status</th>
+        <th scope="col">Symbol</th>
+        <th scope="col">Time ({{ tz }})</th>
+        <th scope="col" class="num">Size</th>
+        <th scope="col">Note</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="num">{{ row.line_number }}</td>
+        <td>{% include "journal/partials/status_badge.html" with status=row.status label=row.status_label %}</td>
+        <td class="break-words">{{ row.symbol }}</td>
+        <td class="whitespace-nowrap">{% if row.entered_at %}{{ row.entered_at|date:"M j, g:i A" }}{% endif %}</td>
+        <td class="num">{{ row.size }}</td>
+        <td class="min-w-[16rem] break-words">{{ row.note }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  {# Mobile (design 6): 2-line cards. Only one of table or list is exposed at a time. #}
+  <ul id="row-cards" class="mt-4 space-y-2 md:hidden">
+    {% for row in rows %}
+    <li class="card">
+      <p class="flex flex-wrap items-center gap-x-3 gap-y-1">{% include "journal/partials/status_badge.html" with status=row.status label=row.status_label %}<span class="break-all font-medium">{{ row.symbol }}</span>{% if row.entered_at %}<span class="text-text-muted">{{ row.entered_at|date:"M j, g:i A" }}</span>{% endif %}</p>
+      <p class="mt-1 break-words text-text-muted">Row {{ row.line_number }}{% if row.size %} · Size {{ row.size }}{% endif %}{% if row.note %} · {{ row.note }}{% endif %}</p>
+    </li>
+    {% endfor %}
+  </ul>
+
+  <div class="pager">
+    {% if showing %}<p class="text-text-muted">{{ showing }}</p>{% endif %}
+    {% if page_obj.has_previous %}<a id="rows-prev" href="?{{ page_query }}&amp;page={{ page_obj.previous_page_number }}" hx-get="?{{ page_query }}&amp;page={{ page_obj.previous_page_number }}" rel="prev" class="btn-secondary">{{ copy.PREVIOUS }}</a>{% endif %}
+    {% if page_obj.has_next %}<a id="rows-next" href="?{{ page_query }}&amp;page={{ page_obj.next_page_number }}" hx-get="?{{ page_query }}&amp;page={{ page_obj.next_page_number }}" rel="next" class="btn-secondary">{{ copy.NEXT }}</a>{% endif %}
+  </div>
+  {% else %}
+  <p class="card mt-4">{{ copy.EMPTY_FILTER }}</p>
+  {% endif %}
+</div>

@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% load tz %}
+{# Imports page (design import-account-label 3.1, 3.5, 4): upload form, then the user's imports. Rows only link to detail in C1; the row menu arrives in PR C2. #}
+{% block title %}{{ copy.PAGE_TITLE }}{% endblock %}
+{% block content %}
+{% get_current_timezone as tz %}
+<h1 class="text-title font-semibold">{{ copy.PAGE_TITLE }}</h1>
+<p class="mt-1 text-text-muted">{{ copy.PAGE_INTRO }}</p>
+
+<section class="card mt-6 max-w-form">
+  {# JS: hx-post; only the Account field comes back on an Account-only problem, otherwise the server retargets the whole body. No JS: plain multipart POST. #}
+  <form id="upload-form" method="post" enctype="multipart/form-data" action="{% url 'imports' %}" hx-post="{% url 'imports' %}" hx-encoding="multipart/form-data" hx-target="#account-field" hx-swap="outerHTML" hx-disabled-elt="find fieldset">
+    {% csrf_token %}
+    {% for error in form.non_field_errors %}
+    <p role="status" class="mb-4 flex items-start gap-2 font-medium"><span class="text-attention">{% include "partials/icon.html" with name="attention" %}</span><span>{{ error }}</span></p>
+    {% endfor %}
+    <fieldset class="space-y-5">
+      {% include "partials/field.html" with field=form.broker %}
+      {% with field=form.file %}
+      <div class="field">
+        <label for="{{ field.id_for_label }}" class="font-medium">{{ field.label }}</label>
+        {# No "required": a missing file gets the design's message on submit, not the browser's. #}
+        <input type="file" name="{{ field.html_name }}" id="{{ field.id_for_label }}" accept=".csv,text/csv"{% if field.errors %} aria-invalid="true" aria-describedby="{{ field.auto_id }}_error"{% endif %}>
+        {% include "partials/field_errors.html" %}
+      </div>
+      {% endwith %}
+      {% include "journal/partials/account_field.html" %}
+      <button type="submit" class="btn-primary w-full sm:w-auto" data-busy="{{ copy.UPLOAD_BUSY }}">{{ copy.UPLOAD_BUTTON }}</button>
+    </fieldset>
+    {# Shown by static/js/app.js when the upload request fails before any page comes back (413 from the body cap, network error). copy.UPLOAD_ERROR is PROVISIONAL, pending ux-designer. #}
+    <div id="upload-error" role="status" data-request-error="{{ copy.UPLOAD_ERROR }}">
+      <p class="mt-4 flex items-start gap-2 font-medium" hidden><span class="text-attention">{% include "partials/icon.html" with name="attention" %}</span><span data-request-error-text></span></p>
+    </div>
+    <p id="upload-live" role="status" class="sr-only" data-busy-live="{{ copy.UPLOAD_BUSY_LIVE }}"></p>
+  </form>
+</section>
+
+<section aria-labelledby="imports-heading" class="mt-10">
+  <h2 id="imports-heading" class="text-lg font-semibold">{{ copy.LIST_HEADING }}</h2>
+  {% if page_obj %}
+  <div class="mt-4 hidden overflow-x-auto rounded-lg border border-border bg-surface md:block">
+    <table class="data-table">
+      <caption class="sr-only">{{ copy.LIST_HEADING }}</caption>
+      <thead>
+        <tr>
+          <th scope="col">Uploaded ({{ tz }})</th>
+          <th scope="col">File</th>
+          <th scope="col">Account</th>
+          <th scope="col" class="num">Imported</th>
+          <th scope="col" class="num">Skipped</th>
+          <th scope="col" class="num">Failed</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in page_obj %}
+        <tr>
+          <td class="whitespace-nowrap">{{ b.uploaded_at|date:"M j, g:i A" }}</td>
+          <th scope="row" class="font-normal">
+            <a href="{% url 'import_detail' b.pk %}" title="{{ b.filename }}" class="break-all">{% include "journal/partials/filename.html" with name=b.filename %}</a>
+            {% if b.needs_attention %}<span class="mt-1 block"><span class="badge badge-attention">{% include "partials/icon.html" with name="info" %}<span>{{ copy.FILTER_LABELS.needs_attention }}</span></span></span>{% endif %}
+          </th>
+          <td>{% include "journal/partials/list_account.html" with label=b.account_label %}</td>
+          <td class="num">{{ b.imported_count }}</td>
+          <td class="num">{{ b.skipped_count }}</td>
+          <td class="num">{{ b.failed_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# Mobile (design 3.5): one card per import. Only one of table or list is exposed at a time. #}
+  <ul id="import-cards" class="mt-4 space-y-3 md:hidden">
+    {% for b in page_obj %}
+    <li class="card space-y-1">
+      <a href="{% url 'import_detail' b.pk %}" title="{{ b.filename }}" class="flex min-h-[44px] items-center break-all font-medium">{% include "journal/partials/filename.html" with name=b.filename %}</a>
+      <p class="text-text-muted">{{ b.uploaded_at|date:"M j, g:i A" }} ({{ tz }})</p>
+      <p>Account: {% include "journal/partials/list_account.html" with label=b.account_label %}</p>
+      <p>Imported {{ b.imported_count }}, skipped {{ b.skipped_count }}, failed {{ b.failed_count }}</p>
+      {% if b.needs_attention %}<p><span class="badge badge-attention">{% include "partials/icon.html" with name="info" %}<span>{{ copy.FILTER_LABELS.needs_attention }}</span></span></p>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+
+  {% if page_obj.has_other_pages %}
+  <div class="pager">
+    {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}" rel="prev" class="btn-secondary">{{ copy.PREVIOUS }}</a>{% endif %}
+    {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}" rel="next" class="btn-secondary">{{ copy.NEXT }}</a>{% endif %}
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="card mt-4">
+    <h3 class="font-semibold">{{ copy.LIST_EMPTY_HEADING }}</h3>
+    <p class="mt-1 text-text-muted">{{ copy.LIST_EMPTY_BODY }}</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
