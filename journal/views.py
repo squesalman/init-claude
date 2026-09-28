@@ -2,6 +2,7 @@ import logging
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import TooManyFieldsSent
 from django.core.paginator import Paginator
 from django.db import DatabaseError
 from django.db.models import Case, Count, Exists, Max, OuterRef, Q, Subquery, Value, When
@@ -15,9 +16,11 @@ from django.views.decorators.cache import never_cache
 
 from accounts import copy
 from journal import copy as import_copy
+from journal import display
 from journal.decorators import htmx_login_required, is_htmx
 from journal.forms import UploadForm, safe_filename
 from journal.importers.topstep import ImportFileError, parse_timestamp
+from journal.matching import derive_trades
 from journal.models import Execution, ImportBatch, JournalEntry, RawImportRow
 from journal.services import (
     BROKER,
@@ -27,6 +30,7 @@ from journal.services import (
     delete_import_batch,
     import_file,
 )
+from journal.stats import compute_stats
 
 log = logging.getLogger(__name__)
 
@@ -44,19 +48,174 @@ JOURNAL_PREVIEW = 20  # design 3.3: first 20 entries, then "Show all"
 DELETED_KEY = "deleted_imports"  # session: ids this user deleted, for the "already deleted" flash
 
 
+SORTS = {  # column -> (direction on first click, visually hidden text per direction)
+    "opened": ("desc", {"desc": copy.SORTED_NEWEST, "asc": copy.SORTED_OLDEST}),
+    "symbol": ("asc", {"asc": copy.SORTED_A_TO_Z, "desc": copy.SORTED_Z_TO_A}),
+    "pnl": ("desc", {"desc": copy.SORTED_HIGHEST, "asc": copy.SORTED_LOWEST}),
+}
+DEFAULT_SORT = "opened"
+
+
+def _user_trades(user):
+    """Follow-ups row 27: derive_trades() needs (executed_at, id) order; id is file order, so
+    same-timestamp legs keep their entry-before-exit order. Do not drop the order_by."""
+    return derive_trades(Execution.objects.for_user(user).order_by("executed_at", "id"))
+
+
+def _sorted(trades, sort, direction):
+    """Design 5.1: ties are newest opened first, then higher opening id; the sorts below are
+    stable, so the base order breaks their ties. pnl puts open trades last both ways."""
+    newest = sorted(trades, key=lambda t: (t.opened_at, t.opening_execution_id), reverse=True)
+    if sort == "opened":
+        return newest if direction == "desc" else newest[::-1]
+    if sort == "symbol":
+        return sorted(newest, key=lambda t: t.symbol, reverse=direction == "desc")
+    closed = sorted(
+        (t for t in newest if not t.is_open), key=lambda t: t.net_pnl, reverse=direction == "desc"
+    )
+    return closed + [t for t in newest if t.is_open]
+
+
+def _sort_params(request):
+    try:
+        query = request.GET
+    except TooManyFieldsSent:  # garbage query string: the default sort, never an error page
+        query = {}
+    sort_dir = query.get("sort_dir")  # mobile <select>: one "column_direction" value (5.2)
+    if sort_dir in dict(copy.SORT_OPTIONS):
+        sort, _, direction = sort_dir.partition("_")
+        return sort, direction
+    sort = query.get("sort")
+    if sort not in SORTS:
+        return DEFAULT_SORT, SORTS[DEFAULT_SORT][0]
+    direction = query.get("dir")
+    return sort, direction if direction in ("asc", "desc") else SORTS[sort][0]
+
+
+def _sort_links(sort, direction) -> dict:
+    base = reverse("trades")
+    links = {}
+    for column, (first, texts) in SORTS.items():
+        active = column == sort
+        target = ("asc" if direction == "desc" else "desc") if active else first
+        links[column] = {
+            "url": f"{base}?{urlencode({'sort': column, 'dir': target})}",
+            "aria_sort": ("ascending" if direction == "asc" else "descending") if active
+            else "none",
+            "sorted_text": texts[direction] if active else None,
+        }
+    return links
+
+
+def _result(trade) -> str:
+    if trade.is_open:
+        return "open"
+    return "win" if trade.net_pnl > 0 else "loss" if trade.net_pnl < 0 else "breakeven"
+
+
+def _opened(when) -> str:
+    """Design 5.1 column 1: "Sep 26, 2:31 PM", with the year when it is not this year."""
+    local = timezone.localtime(when)
+    this_year = local.year == timezone.localtime().year
+    return dateformat.format(local, "M j, g:i A" if this_year else "M j, Y, g:i A")
+
+
+def _trade_row(trade) -> dict:
+    return {
+        "symbol": trade.symbol,
+        "direction": trade.direction,  # "long" | "short"
+        "quantity": display.quantity(trade.quantity),
+        "entry": display.price(trade.avg_entry_price),
+        "exit": None if trade.is_open else display.price(trade.avg_exit_price),
+        "opened_at": trade.opened_at,
+        "opened": _opened(trade.opened_at),
+        "duration": None if trade.is_open else display.duration(trade.closed_at - trade.opened_at),
+        "result": _result(trade),  # "win" | "loss" | "breakeven" | "open"
+        "net_pnl": None if trade.is_open else display.money(trade.net_pnl),
+        "account": trade.account_label or import_copy.LIST_ACCOUNT_BLANK,
+    }
+
+
+def _cards(stats) -> dict:
+    """Section 3 / design 6. stats is None when there are no closed trades (n=0 everywhere).
+    Slice 1 is USD only (design 5.3)."""
+    win_n = stats.win_rate_n if stats else 0
+    breakeven = stats.breakeven_count if stats else 0
+    total_n = stats.total_n if stats else 0
+    total = stats.total_pnl if stats else None
+    avg_r = stats.avg_r if stats else None
+    avg_r_n = stats.avg_r_n if stats else 0
+    return {
+        "win_rate": {
+            "value": copy.WIN_RATE_VALUE.format(rate=stats.win_rate, n=win_n) if win_n
+            else copy.WIN_RATE_EMPTY,
+            "note": _plural(breakeven, copy.BREAKEVEN_NOTE_ONE, copy.BREAKEVEN_NOTE_MANY)
+            if breakeven else None,
+            "sr": copy.WIN_RATE_SR.format(rate=stats.win_rate, n=win_n) if win_n
+            else copy.WIN_RATE_SR_EMPTY,
+        },
+        "total_pnl": {
+            "value": copy.TOTAL_PNL_VALUE.format(amount=display.money(total), n=total_n)
+            if total_n else copy.NO_VALUE,
+            "tone": None if not total_n or total == 0 else "gain" if total > 0 else "loss",
+            "sr": copy.TOTAL_PNL_SR.format(
+                sign="plus " if total > 0 else "minus " if total < 0 else "",
+                amount=f"{abs(total):,.2f}",
+                n=total_n,
+            ) if total_n else copy.TOTAL_PNL_SR_EMPTY,
+        },
+        "avg_r": {
+            "value": copy.AVG_R_VALUE.format(r=avg_r, n=avg_r_n) if avg_r_n else copy.NO_VALUE,
+            "help": None if avg_r_n else copy.AVG_R_HELP,  # shown only when n = 0
+            "sr": copy.AVG_R_SR.format(r=avg_r, n=avg_r_n) if avg_r_n else copy.AVG_R_SR_EMPTY,
+        },
+    }
+
+
 @never_cache  # back button after logout must not show trade data
 @login_required
 def trades(request):
-    # Placeholder: PR D builds the real list. Until then no user-owned data is passed.
-    return render(
-        request,
-        "journal/trade_list.html",
-        {
-            "empty_heading": copy.TRADES_EMPTY_HEADING,
-            "empty_body": copy.TRADES_EMPTY_BODY,
-            "empty_action": copy.TRADES_EMPTY_ACTION,
-        },
-    )
+    """Compute-on-read (ADR-0003 section 5): derive, sort in Python, cards from the same list.
+    No pagination or filters in slice 1 (import-and-list.md section 2)."""
+    user = request.user
+    derived = _user_trades(user)
+    sort, direction = _sort_params(request)
+    show_account = len({t.account_label for t in derived}) >= 2
+    zone = timezone.get_current_timezone_name()
+    context = {
+        "trades": [_trade_row(t) for t in _sorted(derived, sort, direction)],
+        "sort": sort,
+        "dir": direction,
+        "sort_links": _sort_links(sort, direction),
+        "show_account": show_account,
+        "across_accounts": copy.ACROSS_ALL_ACCOUNTS if show_account else None,
+        "zone": zone,
+        "times_in": copy.TIMES_IN.format(zone=zone),
+        "sort_value": f"{sort}_{direction}",
+        "copy": copy,
+        "cards": _cards(compute_stats(derived).get("USD")) if derived else None,
+        "calc_summary": copy.CALC_SUMMARY,
+        "calc_items": [
+            copy.CALC_WIN_RATE, copy.CALC_TOTAL_PNL, copy.CALC_AVG_R,
+            copy.CALC_TIMES.format(zone=zone),
+        ],
+        "empty_heading": None,
+        "empty_body": None,
+        "empty_action": None,
+        "empty_url": None,
+    }
+    if not derived:
+        last = (
+            ImportBatch.objects.for_user(user).order_by("-uploaded_at", "-pk")
+            .values_list("pk", flat=True).first()
+        )
+        context.update(
+            empty_heading=copy.TRADES_EMPTY_HEADING,
+            empty_body=copy.TRADES_EMPTY_B_BODY if last else copy.TRADES_EMPTY_BODY,
+            empty_action=copy.TRADES_EMPTY_B_ACTION if last else copy.TRADES_EMPTY_ACTION,
+            empty_url=reverse("import_detail", args=[last]) if last else reverse("imports"),
+        )
+    return render(request, "journal/trade_list.html", context)
 
 
 def _batch_label(user):

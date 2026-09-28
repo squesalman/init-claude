@@ -1,0 +1,13 @@
+{# Stat cards (design 6): all closed trades, three equal columns from 640px, one column below. Then the "Across all accounts." line (5.3) and the closed "How these are calculated" disclosure (6.4). #}
+<div role="group" aria-label="{{ copy.CARDS_LABEL }}" class="mt-6 grid gap-3 sm:grid-cols-3 sm:gap-4">
+  {% include "journal/partials/stat_card.html" with key="win_rate" label="Win rate" card=cards.win_rate %}
+  {% include "journal/partials/stat_card.html" with key="total_pnl" label="Total P&amp;L" card=cards.total_pnl %}
+  {% include "journal/partials/stat_card.html" with key="avg_r" label="Avg R" card=cards.avg_r %}
+</div>
+{% if across_accounts %}<p class="mt-2 text-text-muted">{{ across_accounts }}</p>{% endif %}
+<details class="disclosure mt-2">
+  <summary>{{ calc_summary }}</summary>
+  <ul class="list-disc space-y-1 pb-2 pl-5">
+    {% for item in calc_items %}<li>{{ item }}</li>{% endfor %}
+  </ul>
+</details>

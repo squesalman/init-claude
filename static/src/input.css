@@ -129,6 +129,14 @@
   .data-table .num { @apply text-right tabular-nums; }
   .pager { @apply mt-4 flex flex-wrap items-center gap-3; }
 
+  /* --- Trades list (auth-and-trades-list.md 5.1, 6). The table region scrolls in both
+     directions so the sticky header works and wide columns never scroll the page. --- */
+  .table-scroll { overflow: auto; max-height: calc(100vh - 8rem); }
+  .sort-link { @apply inline-flex items-center gap-1 whitespace-nowrap; }
+  /* ResultBadge: icon carries gain/loss; Breakeven and Open stay neutral (text color). */
+  .badge-win svg { @apply text-gain; }
+  .badge-loss svg { @apply text-loss; }
+
   /* --- Delete import (PR C2, import-account-label.md 3.3, 3.5, 6). Danger only on the delete
      controls: outline + text, never a filled red slab. Disabled keeps AA text (text-muted)
      and changes the border style too, so it is not color alone. --- */

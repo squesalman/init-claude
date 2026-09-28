@@ -247,10 +247,10 @@ def test_login_required_notice_is_a_status_notice(client):
     status_notice(client.get("/login/?next=/trades/"), copy.LOGIN_REQUIRED)
 
 
-# --- /trades/ placeholder (5.4 A) -------------------------------------------------------
+# --- /trades/ empty state (5.4 A) --------------------------------------------------------
 
 
-def test_trades_placeholder_shows_the_empty_state_with_one_action(client, user):
+def test_trades_empty_state_shows_one_action(client, user):
     client.force_login(user)
     markup = client.get("/trades/").content.decode()
     main = Doc(re.search(r'<main id="main".*?</main>', markup, re.S).group(0))
