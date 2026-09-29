@@ -2,7 +2,7 @@
 
 A web app where retail traders log trades, journal their reasoning and emotions, and get evidence-backed insights into *behavioral* patterns (revenge trading, overtrading, tilt, rule-breaking) — not just P&L stats.
 
-**Status:** building the MVP. Stack chosen (ADR-0002); schema, tenant-isolation tripwire and Topstep dedupe migration are merged. Signup/login/logout and the styled shell exist (PR #4), plus ruff lint (PR #5). The Topstep importer, FIFO matcher, stats and `no-store` middleware are merged (PR #6). The import UI read side — upload, `/imports/` list, import detail, vendored htmx + Alpine — is merged (PR #7 / PR C1). No delete-import UI (PR C2) and no `/trades/` list UI (PR D) yet. Next: PR C2 or PR D; see `docs/plan.md`.
+**Status:** building the MVP. Stack chosen (ADR-0002); schema, tenant-isolation tripwire and Topstep dedupe migration are merged. Signup/login/logout and the styled shell exist (PR #4), plus ruff lint (PR #5). The Topstep importer, FIFO matcher, stats and `no-store` middleware are merged (PR #6). The import UI read side — upload, `/imports/` list, import detail, vendored htmx + Alpine — is merged (PR #7 / PR C1). Delete-import (PR C2) and the `/trades/` list with stat cards (PR D) are merged (PR #8). Next: journaling form or the deferred review items (`docs/data/follow-ups.md` rows 29-33); see `docs/plan.md`.
 
 **Read `docs/README.md` first.** It indexes every doc with owner and status. Found two docs that disagree? Stop, report it, and don't pick a side.
 

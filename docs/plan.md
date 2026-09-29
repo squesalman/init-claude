@@ -1,9 +1,9 @@
 # Build plan
 
-Owner: orchestrator. Living doc. Last updated 2026-09-28. Source of truth for *what is next*; decisions live in the ADRs, follow-ups in `docs/data/follow-ups.md`.
+Owner: orchestrator. Living doc. Last updated 2026-09-29. Source of truth for *what is next*; decisions live in the ADRs, follow-ups in `docs/data/follow-ups.md`.
 
 ## Where we are
-- Merged: Django skeleton + schema (PR #1), tenant-scoped form tripwire (PR #2), Topstep dedupe migration (PR #3), auth + `UserScopedModelForm` + styled shell (PR #4), ruff lint (PR #5), Topstep importer + FIFO matcher + stats + `no-store` middleware (PR #6, merged 2026-09-27), import UI read side — upload, `/imports/` list, import detail (PR #7 / PR C1, merged 2026-09-28). 555 tests pass. No delete-import UI and no `/trades/` list UI yet.
+- Merged: Django skeleton + schema (PR #1), tenant-scoped form tripwire (PR #2), Topstep dedupe migration (PR #3), auth + `UserScopedModelForm` + styled shell (PR #4), ruff lint (PR #5), Topstep importer + FIFO matcher + stats + `no-store` middleware (PR #6, merged 2026-09-27), import UI read side — upload, `/imports/` list, import detail (PR #7 / PR C1, merged 2026-09-28), delete-import flow (PR C2) + `/trades/` list and stat cards (PR D) (PR #8, merged 2026-09-29). 731 tests pass. No delete-import UI and no `/trades/` list UI yet.
 - Accepted: ADR-0002 to ADR-0006 (Decision 2 amended 2026-09-27), domain specs, upload/`/imports` design (rulings added 2026-09-27), slice spec, auth/list design.
 - Final for build: `product/features/import-and-list.md` (behavior, stat card strings) and `design/auth-and-trades-list.md` (layout and copy, single source). Conflicts between them were ruled on 2026-09-26.
 
@@ -23,13 +23,13 @@ Owner: orchestrator. Living doc. Last updated 2026-09-28. Source of truth for *w
 - ADR-0006: importer uses per-row `create()` in one transaction; forms use `UserScopedModelForm`.
 
 ## Start here (next session)
-Next task is **PR C2** (delete-import flow, ADR-0005) or **PR D** (`/trades/` list + 3 stat cards) — orchestrator's call on order. Read in order: `CLAUDE.md`, `docs/README.md`, this file, ADR-0005 (for C2) or `docs/domain/topstep-import.md` + follow-ups row 27 (for D, execution ordering), `docs/data/follow-ups.md` rows 20/24/28 (open items from PR C1: signup.html inline script, delete + rate limit + Caddy cap, provisional `UPLOAD_ERROR` copy). Dev setup: an `.env` copied before 2026-09-27 needs `POSTGRES_HOST=127.0.0.1` (not `localhost`, follow-ups row 23); `.env.example` is fixed. Test vectors are synthetic; the real CSV (`docs/all_trades_export.csv`, git-ignored) stays out of git.
+Slice 1 UI is merged (PR #8 closed C2 and D). Next: decide with the user (journaling form, or the deferred items in `docs/data/follow-ups.md` rows 29-33 first). Old pointer: PR C2 / PR D, both done. Read in order: `CLAUDE.md`, `docs/README.md`, this file, ADR-0005 (for C2) or `docs/domain/topstep-import.md` + follow-ups row 27 (for D, execution ordering), `docs/data/follow-ups.md` rows 20/24/28 (open items from PR C1: signup.html inline script, delete + rate limit + Caddy cap, provisional `UPLOAD_ERROR` copy). Dev setup: an `.env` copied before 2026-09-27 needs `POSTGRES_HOST=127.0.0.1` (not `localhost`, follow-ups row 23); `.env.example` is fixed. Test vectors are synthetic; the real CSV (`docs/all_trades_export.csv`, git-ignored) stays out of git.
 
 ## Remaining work (one branch + worktree + PR per code task, TDD, tests stay in repo)
 Merge order:
 1. **PR B, importer + matcher + stats (backend only): DONE, PR #6 merged 2026-09-27.** Parser, `import_file()`, `derive_trades()`, win rate / total P&L, avg R stubbed at n=0 until journaling. QA (vectors hand-computed) and security review done; findings fixed. Real 177-row export checked locally (counts only): 177 imported, re-import all `skipped_duplicate`.
-2. **PR C, import UI.** ~~C1, upload form with Account field, `/imports/` list + detail: DONE, PR #7 merged 2026-09-28.~~ **C2, delete with counted tick box (ADR-0005; its 7 tests first): not started.**
-3. **PR D, `/trades/` list + 3 stat cards.** Order executions by `(executed_at, id)` in the read path (follow-ups row 27).
+2. **PR C, import UI.** ~~C1, upload form with Account field, `/imports/` list + detail: DONE, PR #7 merged 2026-09-28.~~ ~~C2, delete with counted tick box (ADR-0005): DONE, PR #8 merged 2026-09-29.~~
+3. ~~**PR D, `/trades/` list + 3 stat cards.**~~ DONE, PR #8 merged 2026-09-29. Order executions by `(executed_at, id)` in the read path (follow-ups row 27).
 
 After each PR: `qa-engineer` against the acceptance criteria and vectors; `security-reviewer` after C (uploads, delete) and after any auth change; `code-review` before merge; only the orchestrator merges.
 
