@@ -216,18 +216,25 @@ def journal_after_the_check(monkeypatch, user, batch):
     return added
 
 
-def test_4g_service_turns_a_restrict_hit_mid_delete_into_stale(logged_in, user, monkeypatch):
+def test_4g_service_turns_a_restrict_hit_mid_delete_into_stale(
+    logged_in, user, monkeypatch, caplog
+):
     """PR #9 review: RestrictedError is a DatabaseError, so the view showed DELETE_FAILED
-    with the box pre-ticked, and one more click deleted the entry that arrived mid-race."""
+    with the box pre-ticked, and one more click deleted the entry that arrived mid-race.
+    The broad IntegrityError catch logs the class name, so an unrelated one is not silent."""
     batch = uploaded(logged_in, csv_bytes(T1, T2))
     (seen,) = journal(user, batch, n=1)
     before = snapshot()
     added = journal_after_the_check(monkeypatch, user, batch)
 
-    with pytest.raises(StaleConfirm):
-        delete_import_batch(user, batch.pk, confirmed_max_pk=seen.pk)
+    with caplog.at_level("WARNING", logger="journal.services"):
+        with pytest.raises(StaleConfirm):
+            delete_import_batch(user, batch.pk, confirmed_max_pk=seen.pk)
 
     assert added and snapshot() == before  # all rolled back, the late entry with it
+    assert [r.getMessage() for r in caplog.records if r.name == "journal.services"] == [
+        "import delete refused as stale: RestrictedError"
+    ]
 
 
 def test_4g_view_shows_stale_unticked_when_restrict_hits_mid_delete(

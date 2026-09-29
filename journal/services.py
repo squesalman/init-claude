@@ -6,6 +6,7 @@ Also the batch delete, ADR-0005 section 3.
 """
 
 import hashlib
+import logging
 from dataclasses import dataclass
 
 from django.db import IntegrityError, transaction
@@ -18,6 +19,8 @@ from journal.models import (
     JournalEntry,
     RawImportRow,
 )
+
+log = logging.getLogger(__name__)
 
 BROKER = "topstep"
 _COMPARED = ("symbol", "side", "quantity", "price", "executed_at")  # fees left out on purpose
@@ -144,6 +147,9 @@ def delete_import_batch(user, batch_id, confirmed_max_pk: int) -> DeleteResult:
                 raise StaleConfirm
             execs.delete()
             batch.delete()  # CASCADE raw rows; SET_NULL on execution is now a no-op
-    except IntegrityError:  # RestrictedError from execs.delete(), or the deferred FK at commit:
-        raise StaleConfirm from None  # an entry arrived mid-delete; the atomic rolled back
+    except IntegrityError as exc:  # RestrictedError from execs.delete(), or the deferred FK
+        # at commit: an entry arrived mid-delete and the atomic rolled back. Broad on purpose
+        # (the commit-time error is not a RestrictedError), so log the class: never silent.
+        log.warning("import delete refused as stale: %s", type(exc).__name__)  # class only
+        raise StaleConfirm from exc
     return DeleteResult(trade_count=batch.imported_count, journal_count=n)
