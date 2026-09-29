@@ -113,7 +113,7 @@ def _write(user, filename, file_bytes, label, parsed) -> ImportBatch:
 
 
 class StaleConfirm(Exception):
-    """More journal entries than the user confirmed would go; nothing was deleted."""
+    """A journal entry the user was not shown would go; nothing was deleted."""
 
 
 @dataclass(frozen=True)
@@ -122,18 +122,27 @@ class DeleteResult:
     journal_count: int
 
 
-def delete_import_batch(user, batch_id, confirmed_journal_count: int) -> DeleteResult:
+def delete_import_batch(user, batch_id, confirmed_max_pk: int) -> DeleteResult:
     """ADR-0005 section 3. Raises ImportBatch.DoesNotExist for a missing or someone else's
-    id, StaleConfirm (all rolled back) if more journal entries exist than were confirmed.
+    id, StaleConfirm (all rolled back) if any journal entry newer than the newest one the
+    user was shown exists (0 = none shown). pks only grow, so this also catches an entry
+    that replaced a deleted one, which a count comparison missed (follow-ups 29d).
 
-    confirmed_journal_count must come from a source the caller trusts (see the view: it is
-    read from the server-side session, not the client-posted form field, so an inflated
-    client value can't make this check (n > confirmed) fail to fire)."""
+    confirmed_max_pk must come from a source the caller trusts (see the view: a token
+    signed server-side, not a plain form value, so an inflated client value can't make
+    this check fail to fire)."""
     with transaction.atomic():
         batch = ImportBatch.objects.for_user(user).defer("raw_file").get(pk=batch_id)
         execs = Execution.objects.for_user(user).filter(raw_import_row__import_batch=batch)
-        n, _ = JournalEntry.objects.for_user(user).filter(opening_execution__in=execs).delete()
-        if n > confirmed_journal_count:
+        entries = JournalEntry.objects.for_user(user).filter(opening_execution__in=execs)
+        # Delete only what was confirmed, then refuse if anything else is left: a newer entry
+        # committed before exists() is seen here; one committed after it is blocked by the
+        # RESTRICT FK on opening_execution when execs.delete() runs. Either way, rolled back.
+        # ponytail: max pk misses an UPDATE that re-points an older entry into this batch
+        # (ADR-0003 manual correction, not built yet); when that ships, sign a hash of the
+        # sorted shown pk set instead.
+        n, _ = entries.filter(pk__lte=confirmed_max_pk).delete()
+        if entries.exists():
             raise StaleConfirm
         execs.delete()
         batch.delete()  # CASCADE raw rows; SET_NULL on execution is now a no-op

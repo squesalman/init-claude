@@ -171,6 +171,20 @@ def test_non_usd_closed_trade_logs_a_warning_instead_of_silently_dropping_from_t
     assert any("non-USD" in r.getMessage() for r in caplog.records)
 
 
+def test_more_than_1000_trades_logs_that_the_ceiling_is_passed(logged_in, user, caplog):
+    """Follow-ups 30: _user_trades' ponytail accepts ~1,000 trades per request; say so in
+    the log once a user passes it, instead of slowing down silently."""
+    make(user, *["1"] * 1000)
+    with caplog.at_level("WARNING", logger="journal.views"):
+        ctx(logged_in)
+    assert not any("ceiling" in r.getMessage() for r in caplog.records)
+
+    make(user, "1")
+    with caplog.at_level("WARNING", logger="journal.views"):
+        ctx(logged_in)
+    assert any("ceiling" in r.getMessage() for r in caplog.records)
+
+
 # --- stat cards (section 3, AC 17-23) -------------------------------------------------------
 
 

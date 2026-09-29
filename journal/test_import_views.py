@@ -299,6 +299,15 @@ def test_list_bad_page_value_falls_back(logged_in, user):
     assert len(logged_in.get("/imports/?page=abc").context["page_obj"]) == 2
 
 
+def test_list_too_many_query_fields_fall_back_to_page_one(logged_in, user):
+    """Follow-ups 29b: over DATA_UPLOAD_MAX_NUMBER_FIELDS reads as no query, never a 400."""
+    made = _batches(user, 26)
+    resp = logged_in.get("/imports/?page=2&from=banner&" + "a=1&" * 2000)
+    assert resp.status_code == 200
+    assert [b.pk for b in resp.context["page_obj"]] == [b.pk for b in reversed(made)][:25]
+    assert not resp.context["focus_account"]
+
+
 def test_list_rows_carry_account_label_and_needs_attention(logged_in, user):
     clean = uploaded(logged_in, csv_bytes(T1), label="Combine 50K")
     conflict = uploaded(logged_in, csv_bytes(T1_CHANGED), label="Combine 50K")  # nothing imported

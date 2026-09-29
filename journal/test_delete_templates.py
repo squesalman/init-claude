@@ -83,7 +83,7 @@ def test_two_step_variant_lists_entries_in_a_labelled_region_and_gates_on_the_ti
 ):
     batch = uploaded(logged_in, csv_bytes(T1, T2))
     journal(user, batch, note="Waited for the <b>retest</b>", rules=True)
-    journal(user, batch, note="", rules=False)
+    (newest,) = journal(user, batch, note="", rules=False)
     markup = body(logged_in.get(confirm_url(batch.pk), headers=HTMX))
     d = Doc(markup)
 
@@ -109,7 +109,7 @@ def test_two_step_variant_lists_entries_in_a_labelled_region_and_gates_on_the_ti
     assert root["x-data"] == "deleteConfirm"
     assert root["data-live-on"] == copy.DELETE_LIVE_ENABLED
     assert root["data-live-off"] == copy.DELETE_LIVE_DISABLED
-    assert _shown(d, user, batch) == 2
+    assert _shown(d, user, batch) == newest.pk  # the newest entry shown, not a count (29d)
     assert copy.DELETE_BUTTON_WITH_ENTRIES in d.text
     assert_every_input_is_labelled(d)
 
@@ -133,9 +133,8 @@ def test_more_than_20_entries_offer_show_all(logged_in, user):
 
 def test_not_ticked_notice_sits_above_the_box_and_focuses_it(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1))
-    journal(user, batch)
-    logged_in.get(confirm_url(batch.pk))  # seeds the session-confirmed count the POST checks
-    markup = body(post_delete(logged_in, batch.pk, count=1, headers=HTMX))
+    (entry,) = journal(user, batch)
+    markup = body(post_delete(logged_in, batch.pk, max_pk=entry.pk, headers=HTMX))
     d = Doc(markup)
     assert d.one("input", type="checkbox")["autofocus"] == ""
     notice = markup.index(copy.DELETE_NOT_TICKED)
@@ -143,34 +142,32 @@ def test_not_ticked_notice_sits_above_the_box_and_focuses_it(logged_in, user):
     assert 'role="status"' in markup[markup.rindex("<p ", 0, notice):notice]
 
 
-def test_not_ticked_notice_is_not_shown_when_the_entries_vanished_before_the_post(
-    logged_in, user
-):
+def test_unticked_post_after_the_entries_vanished_shows_the_stale_notice(logged_in, user):
     """Code review finding: if the journal entries are deleted between the GET and this POST,
-    the (session) shown-count is still truthy so 'tick the box' is set, but the fresh read
-    finds nothing to confirm and renders no checkbox: a notice pointing at a box that isn't
-    there. The notice is now gated on the box existing."""
+    the signed token still names them so 'tick the box' is chosen, but the fresh read finds
+    nothing to confirm and renders no checkbox. Follow-ups 29a: say the journal changed
+    (the stale notice) instead of pointing at a missing box or saying nothing."""
     batch = uploaded(logged_in, csv_bytes(T1))
     entries = journal(user, batch)
-    logged_in.get(confirm_url(batch.pk))  # shown = 1 is stashed in the session
     JournalEntry.unscoped.filter(pk__in=[e.pk for e in entries]).delete()  # gone in another tab
 
-    markup = body(post_delete(logged_in, batch.pk, count=1, headers=HTMX))
+    markup = body(post_delete(logged_in, batch.pk, max_pk=entries[-1].pk, headers=HTMX))
 
+    assert copy.DELETE_STALE in markup
     assert copy.DELETE_NOT_TICKED not in markup
     assert 'type="checkbox"' not in markup
 
 
 def test_stale_notice_is_on_top_focused_and_the_box_is_unticked(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1, T2))
-    journal(user, batch, n=2)
-    markup = body(post_delete(logged_in, batch.pk, count=1, tick=True, headers=HTMX))
+    seen, newest = journal(user, batch, n=2)
+    markup = body(post_delete(logged_in, batch.pk, max_pk=seen.pk, tick=True, headers=HTMX))
     d = Doc(markup)
     notice = d.one("p", id="delete-notice")
     assert notice["role"] == "status" and notice["tabindex"] == "-1" and "autofocus" in notice
     assert markup.index(copy.DELETE_STALE) < markup.index('id="delete-desc"')
     assert "checked" not in d.one("input", type="checkbox")
-    assert _shown(d, user, batch) == 2
+    assert _shown(d, user, batch) == newest.pk
 
 
 def test_from_banner_is_posted_back(logged_in):
