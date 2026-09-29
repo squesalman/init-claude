@@ -61,6 +61,8 @@
   :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
   [tabindex="-1"]:focus { outline: 3px solid var(--focus); outline-offset: 2px; }
   main:focus { outline: none; } /* skip-link target, focus ring not needed */
+  /* A display utility (.flex) would otherwise beat the hidden attribute (request-error regions). */
+  [hidden] { display: none !important; }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition: none !important; animation: none !important; }
   }
@@ -126,6 +128,30 @@
   .data-table tbody tr:last-child > * { @apply border-b-0; }
   .data-table .num { @apply text-right tabular-nums; }
   .pager { @apply mt-4 flex flex-wrap items-center gap-3; }
+
+  /* --- Trades list (auth-and-trades-list.md 5.1, 6). The table region scrolls in both
+     directions so the sticky header works and wide columns never scroll the page. --- */
+  .table-scroll { overflow: auto; max-height: calc(100vh - 8rem); }
+  .sort-link { @apply inline-flex items-center gap-1 whitespace-nowrap; }
+  /* ResultBadge: icon carries gain/loss; Breakeven and Open stay neutral (text color). */
+  .badge-win svg { @apply text-gain; }
+  .badge-loss svg { @apply text-loss; }
+
+  /* --- Delete import (PR C2, import-account-label.md 3.3, 3.5, 6). Danger only on the delete
+     controls: outline + text, never a filled red slab. Disabled keeps AA text (text-muted)
+     and changes the border style too, so it is not color alone. --- */
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded border border-danger bg-surface px-4 font-semibold text-danger no-underline;
+    min-height: 44px;
+  }
+  .btn-danger:disabled { @apply cursor-not-allowed border-dashed border-border-strong text-text-muted; }
+  .delete-dialog { @apply rounded-lg border border-border bg-surface p-0 text-text; width: min(640px, calc(100% - 32px)); max-height: calc(100vh - 32px); }
+  .delete-dialog::backdrop { background: rgb(0 0 0 / 0.5); }
+  /* RowActionsMenu: a <details> disclosure; its summary is the 44px "…" button. */
+  .row-menu > summary { list-style: none; }
+  .row-menu > summary::-webkit-details-marker { display: none; }
+  .menu-item { @apply flex items-center gap-2 px-3 font-medium text-text no-underline; min-height: 44px; }
+  .menu-item-danger { color: var(--danger); }
 }
 
 /* htmx swap in flight (hx-indicator adds .htmx-request at runtime, so this sits outside

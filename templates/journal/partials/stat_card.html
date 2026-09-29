@@ -1,0 +1,9 @@
+{# StatCard (design 6, 7): h2 label, one value-with-n line, optional muted lines. The compact value is hidden from assistive tech; card.sr is what is announced. Tone is reinforcement only (the sign is printed). #}
+<section aria-labelledby="card-{{ key }}" class="card bg-surface-raised">
+  <div class="flex flex-wrap items-baseline justify-between gap-x-3 sm:block">
+    <h2 id="card-{{ key }}" class="font-medium">{{ label }}</h2>
+    <p class="text-lg font-semibold tabular-nums sm:mt-1{% if card.tone == "gain" %} text-gain{% elif card.tone == "loss" %} text-loss{% endif %}"><span aria-hidden="true">{{ card.value }}</span><span class="sr-only">{{ card.sr }}</span></p>
+  </div>
+  {% if card.note %}<p class="mt-1 text-text-muted">{{ card.note }}</p>{% endif %}
+  {% if card.help %}<p class="mt-1 text-text-muted">{{ card.help }}</p>{% endif %}
+</section>

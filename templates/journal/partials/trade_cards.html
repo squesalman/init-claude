@@ -1,0 +1,13 @@
+{# TradeCardList (design 5.2): mobile only, same rows as the table; only one of the two is exposed at a time. Zone named once above the list, not per card. #}
+<p class="mt-6 text-text-muted sm:hidden">{{ times_in }}</p>
+<ul id="trade-cards" class="mt-3 space-y-3 sm:hidden">
+  {% for t in trades %}
+  <li class="card space-y-1">
+    <p class="flex items-baseline justify-between gap-3"><span><span class="break-all font-semibold">{{ t.symbol }}</span> {% if t.direction == "long" %}Long{% else %}Short{% endif %}</span><span class="whitespace-nowrap font-semibold tabular-nums{% if t.result == "win" %} text-gain{% elif t.result == "loss" %} text-loss{% endif %}">{{ t.net_pnl|default:"Open" }}</span></p>
+    <p>{% include "journal/partials/result_badge.html" with result=t.result %}</p>
+    <p class="text-text-muted tabular-nums">{{ t.opened }}</p>
+    <p class="tabular-nums">{{ t.duration|default:"Open" }} · Qty {{ t.quantity }} · {{ t.entry }} to {% if t.exit %}{{ t.exit }}{% else %}<span aria-hidden="true">-</span><span class="sr-only">{{ copy.EXIT_OPEN_SR }}</span>{% endif %}</p>
+    {% if show_account %}<p class="break-words">Account: {{ t.account }}</p>{% endif %}
+  </li>
+  {% endfor %}
+</ul>

@@ -1,0 +1,8 @@
+{# RowActionsMenu (design 3.5, 6, 7): native <details> disclosure (expanded state is exposed by <summary>, works without JS); static/js/app.js adds Esc, outside click and Tab-away closing. Items: a link and the delete link that opens the ConfirmDialog (no JS: the confirm page). #}
+<details class="row-menu" data-menu>
+  <summary aria-label="Actions for {{ b.filename }}" class="btn-secondary w-11 px-0"><span aria-hidden="true">…</span></summary>
+  <ul class="mt-1 min-w-[12rem] rounded border border-border bg-surface-raised py-1 text-left">
+    <li><a href="{% url 'import_detail' b.pk %}" class="menu-item">View details</a></li>
+    <li>{% url 'import_delete' b.pk as del_url %}{% include "journal/partials/delete_link.html" with url=del_url cls="menu-item menu-item-danger" icon=True %}</li>
+  </ul>
+</details>

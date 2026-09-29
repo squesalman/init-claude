@@ -1,0 +1,5 @@
+{# ConfirmDialog shell (design 3.3, 6, 7). One per page; every "Delete this import" control hx-gets delete_confirm.html into #delete-dialog-body and static/js/app.js opens it with showModal() (focus trap, inert page, Esc). The close button needs no JS. #}
+<dialog id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-desc" class="delete-dialog">
+  <div id="delete-dialog-body"></div>
+  <form method="dialog" class="absolute right-2 top-2"><button class="inline-flex h-11 w-11 items-center justify-center rounded text-text-muted" aria-label="Close">{% include "partials/icon.html" with name="close" %}</button></form>
+</dialog>

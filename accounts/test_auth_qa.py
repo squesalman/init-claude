@@ -739,8 +739,10 @@ def test_trades_shows_nothing_of_another_users_account_or_rows_and_never_mixes_s
         for leak in ("alice-secret", "ALICEONLY", "alice-private-file", "Asia/Tokyo"):
             assert leak not in body, (path, leak)
         assert "bob@example.com" in body
-        # nothing user-owned is passed to the template yet; PR D adds rows and must extend this
-        assert not any(key in resp.context for key in ("trades", "executions", "batches"))
+        # PR D: B has no executions and no imports, so B gets empty state A and no rows/cards.
+        assert resp.context["trades"] == [] and resp.context["cards"] is None
+        assert resp.context["empty_url"] == "/imports/"
+        assert not any(key in resp.context for key in ("executions", "batches"))
 
     # A's concurrent session is untouched by B's requests.
     assert client_a.get("/trades/").wsgi_request.user == a

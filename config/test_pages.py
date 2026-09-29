@@ -71,25 +71,26 @@ def status_notice(resp, message):
 
 
 DETAIL = "import-detail"  # stands in for /imports/<pk>/ of a batch made on the fly
+DELETE = "import-delete"  # and /imports/<pk>/delete/ (the no-JS confirm page)
 
 
 def get_page(client, user, path):
-    if path in ("/trades/", "/imports/", DETAIL):
+    if path in ("/trades/", "/imports/", DETAIL, DELETE):
         client.force_login(user)
-    if path == DETAIL:
+    if path in (DETAIL, DELETE):
         from journal.models import ImportBatch
 
         batch = ImportBatch.objects.create(
             user=user, broker="topstep", filename="f.csv", file_sha256="0" * 64, raw_file=b""
         )
-        path = f"/imports/{batch.pk}/"
+        path = f"/imports/{batch.pk}/" + ("delete/" if path == DELETE else "")
     return client.get(path)
 
 
 # --- shell (section 3) ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/login/", "/signup/", "/trades/", "/imports/", DETAIL])
+@pytest.mark.parametrize("path", ["/login/", "/signup/", "/trades/", "/imports/", DETAIL, DELETE])
 def test_every_page_has_the_shell_basics(client, user, path):
     resp = get_page(client, user, path)
     assert resp.status_code == 200
@@ -246,10 +247,10 @@ def test_login_required_notice_is_a_status_notice(client):
     status_notice(client.get("/login/?next=/trades/"), copy.LOGIN_REQUIRED)
 
 
-# --- /trades/ placeholder (5.4 A) -------------------------------------------------------
+# --- /trades/ empty state (5.4 A) --------------------------------------------------------
 
 
-def test_trades_placeholder_shows_the_empty_state_with_one_action(client, user):
+def test_trades_empty_state_shows_one_action(client, user):
     client.force_login(user)
     markup = client.get("/trades/").content.decode()
     main = Doc(re.search(r'<main id="main".*?</main>', markup, re.S).group(0))

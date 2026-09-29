@@ -1,0 +1,2 @@
+{# Opens the ConfirmDialog via htmx; without JS it is a plain link to the confirm page. Params: url, cls, icon (optional). #}
+<a href="{{ url }}" hx-get="{{ url }}" hx-target="#delete-dialog-body" data-opens-dialog class="{{ cls }}">{% if icon %}{% include "partials/icon.html" with name="trash" %}<span>{{ copy.DELETE_ACTION }}</span>{% else %}{{ copy.DELETE_ACTION }}{% endif %}</a>

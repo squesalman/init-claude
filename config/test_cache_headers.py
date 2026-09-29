@@ -35,7 +35,7 @@ def test_import_detail_is_private_no_store(client):
     )
     client.force_login(user)
 
-    for url in ("/imports/", f"/imports/{batch.pk}/"):
+    for url in ("/imports/", f"/imports/{batch.pk}/", f"/imports/{batch.pk}/delete/"):
         response = client.get(url)
         assert response.status_code == 200, url  # a 404 is no-store too; prove the page
         assert "no-store" in response["Cache-Control"], url

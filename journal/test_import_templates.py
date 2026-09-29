@@ -33,6 +33,7 @@ TEMPLATES = settings.BASE_DIR / "templates"
 NEW_TEMPLATES = [
     TEMPLATES / "journal" / "import_list.html",
     TEMPLATES / "journal" / "import_detail.html",
+    TEMPLATES / "journal" / "import_delete.html",
     *sorted((TEMPLATES / "journal" / "partials").glob("*.html")),
 ]
 VENDOR = settings.BASE_DIR / "static" / "vendor"
@@ -185,7 +186,7 @@ def test_list_table_has_caption_scoped_headers_and_zone(logged_in, user):
     d = Doc(markup)
     assert re.search(r'<caption class="sr-only">\s*' + copy.LIST_HEADING, markup)
     headers = d.all("th", scope="col")
-    assert len(headers) == 6
+    assert len(headers) == 7  # PR C2: + Actions (visually hidden header)
     assert "(America/New_York)" in d.text
     for word in ("Uploaded", "File", "Account", "Imported", "Skipped", "Failed"):
         assert word in d.text
@@ -195,7 +196,8 @@ def test_list_rows_link_to_detail_and_show_counts_in_words_on_mobile(logged_in, 
     batch = uploaded(logged_in, csv_bytes(T1))
     markup = main_of(page(logged_in.get("/imports/")))
     d = Doc(markup)
-    assert len(d.all("a", href=f"/imports/{batch.pk}/")) == 2  # table + card, one exposed
+    # table + card, one exposed; each also has "View details" in its row menu (PR C2)
+    assert len(d.all("a", href=f"/imports/{batch.pk}/")) == 4
     cards = region(markup, "import-cards")
     assert "Imported 1, skipped 0, failed 0" in html.unescape(cards)
     assert copy.ACCOUNT_LINE_BLANK.replace("no account name", copy.LIST_ACCOUNT_BLANK) in (
@@ -401,13 +403,7 @@ def test_base_has_no_inline_script():
     assert not re.findall(r"<script(?![^>]*\ssrc=)[^>]*>", src)  # all JS is in static/js/app.js
 
 
-def test_c1_ships_no_delete_controls(logged_in, messy_batch):
-    for resp in (logged_in.get("/imports/"), detail(logged_in, messy_batch)):
-        markup = page(resp)
-        assert "Delete this import" not in markup and "/delete/" not in markup
-        assert "<dialog" not in markup and "Actions for" not in markup
-    for path in NEW_TEMPLATES:
-        assert "delete" not in path.read_text(encoding="utf-8").lower(), path.name
+# test_c1_ships_no_delete_controls removed: PR C2 ships delete (ADR-0005); see test_delete_views.py.
 
 
 # --- review fix batch: upload request errors, aria-invalid kept for server errors ------------
