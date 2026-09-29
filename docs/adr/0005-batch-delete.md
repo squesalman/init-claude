@@ -59,11 +59,17 @@ B, concretely:
 - If it has **N > 0**: the confirm lists them, and the delete button stays disabled until the user
   ticks a required checkbox, *"Also delete my N journal entries (M with written notes). This can't be
   undone."* The server enforces the checkbox too. Without it, it re-renders the confirm and deletes nothing.
-- **Stale-count guard:** the form posts back the journal-entry count the user was shown. Inside the
-  transaction, the delete in step 1 returns how many rows it deleted. If that is **greater** than the
-  count shown (the user journaled in another tab), roll back and re-render the confirm with fresh counts.
-  This needs no locks. A journal entry inserted concurrently after step 1 fails on the execution FK,
-  so it errors out and is never lost silently.
+- **Stale-confirm guard:** the confirm signs the newest journal-entry pk shown (`Max(pk)`, 0 for none)
+  with `django.core.signing` (salt `import-delete-max-pk`, bound to user id + batch pk) into a hidden
+  `shown` field. A forged or missing token reads as 0. No client-posted count is trusted (no upper
+  bound) and no session value is used (another tab's GET overwrites it). Inside the transaction, step 1
+  deletes only entries with pk <= that value; if any entry is still left in the batch (the user
+  journaled in another tab; pks only grow, so this also catches a new entry replacing a deleted one),
+  roll back and re-render the confirm with fresh counts. This needs no locks. An entry committed after
+  that check is blocked by the RESTRICT FK on `opening_execution` when executions are deleted, so it
+  errors out and is never lost silently.
+  Known ceiling: an UPDATE that re-points an older entry into the batch (ADR-0003 manual correction,
+  not built) is not caught by max pk. When that ships, sign a hash of the sorted shown pk set instead.
 
 Why B satisfies "never lose writing silently": the loss is counted, named, listed, and needs a
 deliberate extra action. Why B fits "journaling friction is the top risk": the common case (no
@@ -73,12 +79,13 @@ journal yet) is one click. The rare case costs one checkbox, not N trips through
 
 ```python
 # journal/services.py (backend-engineer) — shape, not final code
-def delete_import_batch(user, batch_id, confirmed_journal_count: int) -> None:
+def delete_import_batch(user, batch_id, confirmed_max_pk: int) -> DeleteResult:
     with transaction.atomic():
         batch = ImportBatch.objects.for_user(user).defer("raw_file").get(pk=batch_id)  # DoesNotExist -> 404
         execs = Execution.objects.for_user(user).filter(raw_import_row__import_batch=batch)
-        n, _ = JournalEntry.objects.for_user(user).filter(opening_execution__in=execs).delete()
-        if n > confirmed_journal_count:
+        entries = JournalEntry.objects.for_user(user).filter(opening_execution__in=execs)
+        n, _ = entries.filter(pk__lte=confirmed_max_pk).delete()  # confirmed_max_pk: signed, from the view
+        if entries.exists():
             raise StaleConfirm  # rolls back; view re-renders confirm with fresh counts
         execs.delete()
         batch.delete()  # CASCADE raw rows; SET_NULL on execution is now a no-op
