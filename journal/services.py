@@ -127,20 +127,23 @@ def delete_import_batch(user, batch_id, confirmed_max_pk: int) -> DeleteResult:
     id, StaleConfirm (all rolled back) if the batch has a journal entry the user was not
     shown. confirmed_max_pk is the newest entry pk shown (0 = none) and must come from a
     source the caller trusts (the view's signed token), or an inflated value defeats this."""
-    with transaction.atomic():
-        batch = ImportBatch.objects.for_user(user).defer("raw_file").get(pk=batch_id)
-        execs = Execution.objects.for_user(user).filter(raw_import_row__import_batch=batch)
-        entries = JournalEntry.objects.for_user(user).filter(opening_execution__in=execs)
-        # Delete only what was confirmed, then refuse if anything is left (follow-ups 29d):
-        # a newer entry committed before exists() is seen here; one committed after it is
-        # blocked by the RESTRICT FK on opening_execution when execs.delete() runs.
-        # ponytail: max pk misses (a) an UPDATE that re-points an older entry into this batch
-        # (ADR-0003 manual correction, not built yet) and (b) a lower pk committing after a
-        # higher one (Postgres sequences are non-transactional; concurrent same-user
-        # inserts). Fix for both: sign a hash of the sorted shown pk set instead.
-        n, _ = entries.filter(pk__lte=confirmed_max_pk).delete()
-        if entries.exists():
-            raise StaleConfirm
-        execs.delete()
-        batch.delete()  # CASCADE raw rows; SET_NULL on execution is now a no-op
+    try:
+        with transaction.atomic():
+            batch = ImportBatch.objects.for_user(user).defer("raw_file").get(pk=batch_id)
+            execs = Execution.objects.for_user(user).filter(raw_import_row__import_batch=batch)
+            entries = JournalEntry.objects.for_user(user).filter(opening_execution__in=execs)
+            # Delete only what was confirmed, then refuse if anything is left (follow-ups 29d):
+            # a newer entry committed before exists() is seen here; one committed after it is
+            # blocked by the RESTRICT FK on opening_execution when execs.delete() runs.
+            # ponytail: max pk misses (a) an UPDATE that re-points an older entry into this batch
+            # (ADR-0003 manual correction, not built yet) and (b) a lower pk committing after a
+            # higher one (Postgres sequences are non-transactional; concurrent same-user
+            # inserts). Fix for both: sign a hash of the sorted shown pk set instead.
+            n, _ = entries.filter(pk__lte=confirmed_max_pk).delete()
+            if entries.exists():
+                raise StaleConfirm
+            execs.delete()
+            batch.delete()  # CASCADE raw rows; SET_NULL on execution is now a no-op
+    except IntegrityError:  # RestrictedError from execs.delete(), or the deferred FK at commit:
+        raise StaleConfirm from None  # an entry arrived mid-delete; the atomic rolled back
     return DeleteResult(trade_count=batch.imported_count, journal_count=n)

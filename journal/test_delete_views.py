@@ -200,6 +200,56 @@ def test_4f_service_refuses_a_swap_that_lands_inside_the_delete(logged_in, user,
     assert swapped and ImportBatch.unscoped.filter(pk=batch.pk).exists()
 
 
+def journal_after_the_check(monkeypatch, user, batch):
+    """Another transaction journals one more trade right after the service's exists()
+    check, so the RESTRICT FK is what stops execs.delete()."""
+    real_exists = QuerySet.exists
+    added = []
+
+    def exists_then_journal(qs):
+        found = real_exists(qs)
+        if qs.model is JournalEntry and not added:
+            added.extend(journal(user, batch, n=1))
+        return found
+
+    monkeypatch.setattr(QuerySet, "exists", exists_then_journal)
+    return added
+
+
+def test_4g_service_turns_a_restrict_hit_mid_delete_into_stale(logged_in, user, monkeypatch):
+    """PR #9 review: RestrictedError is a DatabaseError, so the view showed DELETE_FAILED
+    with the box pre-ticked, and one more click deleted the entry that arrived mid-race."""
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    (seen,) = journal(user, batch, n=1)
+    before = snapshot()
+    added = journal_after_the_check(monkeypatch, user, batch)
+
+    with pytest.raises(StaleConfirm):
+        delete_import_batch(user, batch.pk, confirmed_max_pk=seen.pk)
+
+    assert added and snapshot() == before  # all rolled back, the late entry with it
+
+
+def test_4g_view_shows_stale_unticked_when_restrict_hits_mid_delete(
+    logged_in, user, monkeypatch
+):
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    journal(user, batch, n=1)
+    page = Doc(logged_in.get(confirm_url(batch.pk)).content.decode())
+    before = snapshot()
+    added = journal_after_the_check(monkeypatch, user, batch)
+
+    resp = logged_in.post(
+        confirm_url(batch.pk),
+        {"shown": page.one("input", name="shown")["value"], "confirm": "on"},
+    )
+
+    assert added and resp.status_code == 200
+    assert resp.context["notice"] == copy.DELETE_STALE
+    assert "checked" not in Doc(resp.content.decode()).one("input", type="checkbox")
+    assert snapshot() == before
+
+
 def test_4e_entry_swapped_between_get_and_post_is_refused(logged_in, user):
     """Follow-ups 29d: one entry deleted and another added between the GET and the POST
     keeps the count at 1, so a count check would delete an entry the user never saw. The
