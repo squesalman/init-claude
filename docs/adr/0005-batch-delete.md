@@ -128,7 +128,7 @@ Computed on GET from the same scoped querysets, and all shown to the user:
 | `trade_count` | batch rows with status `imported` (Topstep: 1 row = 1 trade) |
 | `other_rows_count` | `row_count - trade_count` (skipped/failed rows, removed with the batch, no trades) |
 | `journal_count` (N) | journal entries on this batch's executions |
-| `noted_count` (M) | of those, `note <> ''` |
+| `noted_count` (M) | of those, note not whitespace-only (`note !~ '^\s*$'`; Postgres whitespace class, see follow-ups row 36c) |
 | `journal_list` | per entry: symbol, opened-at (user TZ), rules-followed answer, first ~80 chars of the note, link to the trade. Lets the user copy a note before deleting |
 
 Draft copy (coach tone; ux-designer owns the final wording):
