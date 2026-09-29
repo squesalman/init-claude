@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db.models import QuerySet
 from django.db.models.deletion import RestrictedError
 from django.test import Client
 from django.utils import dateformat, timezone
@@ -80,8 +81,9 @@ def confirm_url(pk):
     return f"/imports/{pk}/delete/"
 
 
-def post_delete(client, pk, count=0, tick=False, headers=None, **extra):
-    token = _shown_signer(int(client.session["_auth_user_id"]), pk).sign(str(count))
+def post_delete(client, pk, max_pk=0, tick=False, headers=None, **extra):
+    """max_pk: the newest journal-entry pk the dialog showed (0 = none shown)."""
+    token = _shown_signer(int(client.session["_auth_user_id"]), pk).sign(str(max_pk))
     data = {"shown": token, **extra}
     if tick:
         data["confirm"] = "on"
@@ -121,11 +123,11 @@ def test_1_delete_removes_the_batch_its_rows_and_executions_and_nothing_else(log
 
 def test_2_journaled_batch_without_the_tick_deletes_nothing(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1, T2))
-    journal(user, batch, note="waited for the retest")
+    (entry,) = journal(user, batch, note="waited for the retest")
     logged_in.get(confirm_url(batch.pk))
     before = snapshot()
 
-    resp = post_delete(logged_in, batch.pk, count=1, tick=False)
+    resp = post_delete(logged_in, batch.pk, max_pk=entry.pk, tick=False)
 
     assert resp.status_code == 200
     assert snapshot() == before
@@ -133,12 +135,12 @@ def test_2_journaled_batch_without_the_tick_deletes_nothing(logged_in, user):
     assert resp.context["journal_count"] == 1
 
 
-def test_3_tick_and_correct_count_deletes_the_journal_entries_too(logged_in, user):
+def test_3_tick_and_confirmed_entries_deletes_the_journal_entries_too(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1, T2))
     entries = journal(user, batch, note="a note", n=2)
     logged_in.get(confirm_url(batch.pk))
 
-    resp = post_delete(logged_in, batch.pk, count=2, tick=True)
+    resp = post_delete(logged_in, batch.pk, max_pk=entries[-1].pk, tick=True)
 
     assert resp.status_code == 302
     assert not JournalEntry.unscoped.filter(pk__in=[e.pk for e in entries]).exists()
@@ -148,13 +150,13 @@ def test_3_tick_and_correct_count_deletes_the_journal_entries_too(logged_in, use
     ]
 
 
-def test_4_stale_count_deletes_nothing_and_rerenders_fresh_counts(logged_in, user):
+def test_4_stale_confirm_deletes_nothing_and_rerenders_fresh_counts(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1, T2))
-    journal(user, batch, note="first", n=1)
+    (seen,) = journal(user, batch, note="first", n=1)
     journal(user, batch, note="", n=1)  # journaled in another tab after the dialog opened
     before = snapshot()
 
-    resp = post_delete(logged_in, batch.pk, count=1, tick=True)
+    resp = post_delete(logged_in, batch.pk, max_pk=seen.pk, tick=True)
 
     assert resp.status_code == 200
     assert snapshot() == before
@@ -162,20 +164,122 @@ def test_4_stale_count_deletes_nothing_and_rerenders_fresh_counts(logged_in, use
     assert resp.context["journal_count"] == 2 and resp.context["noted_count"] == 1
 
 
-def test_4_service_rolls_back_the_journal_delete_on_a_stale_count(logged_in, user):
+def test_4_service_rolls_back_the_journal_delete_on_a_stale_confirm(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1, T2))
-    journal(user, batch, n=2)
+    seen, _ = journal(user, batch, n=2)
     before = snapshot()
 
     with pytest.raises(StaleConfirm):
-        delete_import_batch(user, batch.pk, confirmed_journal_count=1)
+        delete_import_batch(user, batch.pk, confirmed_max_pk=seen.pk)
 
     assert snapshot() == before
 
 
-def test_4b_forged_or_unsigned_count_cannot_bypass_the_stale_check(logged_in, user):
-    """Code review: an unbounded client-posted count made 'n > confirmed' never fire. The
-    count now travels as a signed token, so a forged or missing one reads as 0."""
+def test_4f_service_refuses_a_swap_that_lands_inside_the_delete(logged_in, user, monkeypatch):
+    """Security review: another transaction deletes the shown entry and adds a newer one
+    just before our journal delete runs. Counting first then deleting all saw n == shown
+    and removed the unseen entry; the service must delete only the confirmed pks and
+    refuse when anything else remains."""
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    (seen,) = journal(user, batch, n=1)
+    real_delete = QuerySet.delete
+    swapped = []
+
+    def delete_after_a_swap(qs):
+        if qs.model is JournalEntry and not swapped:
+            swapped.append(True)  # the "other transaction", once
+            JournalEntry.unscoped.filter(pk=seen.pk).delete()
+            journal(user, batch, n=1)
+        return real_delete(qs)
+
+    monkeypatch.setattr(QuerySet, "delete", delete_after_a_swap)
+
+    with pytest.raises(StaleConfirm):
+        delete_import_batch(user, batch.pk, confirmed_max_pk=seen.pk)
+
+    assert swapped and ImportBatch.unscoped.filter(pk=batch.pk).exists()
+
+
+def journal_after_the_check(monkeypatch, user, batch):
+    """Another transaction journals one more trade right after the service's exists()
+    check, so the RESTRICT FK is what stops execs.delete()."""
+    real_exists = QuerySet.exists
+    added = []
+
+    def exists_then_journal(qs):
+        found = real_exists(qs)
+        if qs.model is JournalEntry and not added:
+            added.extend(journal(user, batch, n=1))
+        return found
+
+    monkeypatch.setattr(QuerySet, "exists", exists_then_journal)
+    return added
+
+
+def test_4g_service_turns_a_restrict_hit_mid_delete_into_stale(
+    logged_in, user, monkeypatch, caplog
+):
+    """PR #9 review: RestrictedError is a DatabaseError, so the view showed DELETE_FAILED
+    with the box pre-ticked, and one more click deleted the entry that arrived mid-race.
+    The broad IntegrityError catch logs the class name, so an unrelated one is not silent."""
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    (seen,) = journal(user, batch, n=1)
+    before = snapshot()
+    added = journal_after_the_check(monkeypatch, user, batch)
+
+    with caplog.at_level("WARNING", logger="journal.services"):
+        with pytest.raises(StaleConfirm):
+            delete_import_batch(user, batch.pk, confirmed_max_pk=seen.pk)
+
+    assert added and snapshot() == before  # all rolled back, the late entry with it
+    assert [r.getMessage() for r in caplog.records if r.name == "journal.services"] == [
+        "import delete refused as stale: RestrictedError"
+    ]
+
+
+def test_4g_view_shows_stale_unticked_when_restrict_hits_mid_delete(
+    logged_in, user, monkeypatch
+):
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    journal(user, batch, n=1)
+    page = Doc(logged_in.get(confirm_url(batch.pk)).content.decode())
+    before = snapshot()
+    added = journal_after_the_check(monkeypatch, user, batch)
+
+    resp = logged_in.post(
+        confirm_url(batch.pk),
+        {"shown": page.one("input", name="shown")["value"], "confirm": "on"},
+    )
+
+    assert added and resp.status_code == 200
+    assert resp.context["notice"] == copy.DELETE_STALE
+    assert "checked" not in Doc(resp.content.decode()).one("input", type="checkbox")
+    assert snapshot() == before
+
+
+def test_4e_entry_swapped_between_get_and_post_is_refused(logged_in, user):
+    """Follow-ups 29d: one entry deleted and another added between the GET and the POST
+    keeps the count at 1, so a count check would delete an entry the user never saw. The
+    token carries the newest pk shown instead, and the new entry's pk is higher."""
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    (seen,) = journal(user, batch, n=1)
+    page = Doc(logged_in.get(confirm_url(batch.pk)).content.decode())
+    seen.delete()  # another tab
+    journal(user, batch, n=1)  # another tab, a different trade
+    before = snapshot()
+
+    resp = logged_in.post(
+        confirm_url(batch.pk),
+        {"shown": page.one("input", name="shown")["value"], "confirm": "on"},
+    )
+
+    assert resp.status_code == 200 and resp.context["notice"] == copy.DELETE_STALE
+    assert snapshot() == before
+
+
+def test_4b_forged_or_unsigned_token_cannot_bypass_the_stale_check(logged_in, user):
+    """Code review: an unbounded client-posted value made the stale check never fire. The
+    newest pk shown now travels as a signed token, so a forged or missing one reads as 0."""
     batch = uploaded(logged_in, csv_bytes(T1, T2))
     journal(user, batch, n=1)
     before = snapshot()
@@ -188,7 +292,7 @@ def test_4b_forged_or_unsigned_count_cannot_bypass_the_stale_check(logged_in, us
 
 def test_4d_second_tab_cannot_widen_what_the_first_tab_confirmed(logged_in, user):
     """Tab A shows 1 entry; another tab renders after a 2nd entry exists. Tab A's own
-    token still says 1, so its submit is stale rather than deleting 2 entries."""
+    token still names only the 1st, so its submit is stale rather than deleting 2 entries."""
     batch = uploaded(logged_in, csv_bytes(T1, T2))
     journal(user, batch, n=1)
     page = Doc(logged_in.get(confirm_url(batch.pk)).content.decode())
@@ -203,14 +307,17 @@ def test_4d_second_tab_cannot_widen_what_the_first_tab_confirmed(logged_in, user
     assert snapshot() == before
 
 
-def test_4c_honest_posted_count_still_deletes_normally(logged_in, user):
-    """Regression guard for the fix above: a client that posts back the count it was
+def test_4c_honest_posted_token_still_deletes_normally(logged_in, user):
+    """Regression guard for the fix above: a client that posts back the token it was
     actually shown (the ordinary, non-adversarial case) is unaffected."""
     batch = uploaded(logged_in, csv_bytes(T1, T2))
     entries = journal(user, batch, n=2)
-    logged_in.get(confirm_url(batch.pk))
+    page = Doc(logged_in.get(confirm_url(batch.pk)).content.decode())
 
-    resp = post_delete(logged_in, batch.pk, count=2, tick=True)
+    resp = logged_in.post(
+        confirm_url(batch.pk),
+        {"shown": page.one("input", name="shown")["value"], "confirm": "on"},
+    )
 
     assert resp.status_code == 302
     assert not JournalEntry.unscoped.filter(pk__in=[e.pk for e in entries]).exists()
@@ -218,15 +325,15 @@ def test_4c_honest_posted_count_still_deletes_normally(logged_in, user):
 
 def test_5_isolation_other_user_gets_404_and_nothing_changes(logged_in, user, other):
     batch = uploaded(logged_in, csv_bytes(T1))
-    journal(user, batch)
+    (entry,) = journal(user, batch)
     before = snapshot()
     intruder = Client()
     intruder.force_login(other)
 
     assert intruder.get(confirm_url(batch.pk)).status_code == 404
-    assert post_delete(intruder, batch.pk, count=1, tick=True).status_code == 404
+    assert post_delete(intruder, batch.pk, max_pk=entry.pk, tick=True).status_code == 404
     with pytest.raises(ImportBatch.DoesNotExist):
-        delete_import_batch(other, batch.pk, confirmed_journal_count=99)
+        delete_import_batch(other, batch.pk, confirmed_max_pk=entry.pk)
     assert snapshot() == before
 
 
@@ -236,7 +343,7 @@ def test_6_all_duplicate_batch_removes_no_executions(logged_in, user):
     assert again.imported_count == 0
     kept = set(batch_executions(user, first).values_list("pk", flat=True))
 
-    result = delete_import_batch(user, again.pk, confirmed_journal_count=0)
+    result = delete_import_batch(user, again.pk, confirmed_max_pk=0)
 
     assert (result.trade_count, result.journal_count) == (0, 0)
     assert not ImportBatch.unscoped.filter(pk=again.pk).exists()
@@ -307,6 +414,27 @@ def test_confirm_body_variants(logged_in, user):
 
     empty = uploaded(logged_in, csv_bytes(T1))  # all duplicates
     assert logged_in.get(confirm_url(empty.pk)).context["body"] == copy.DELETE_BODY_NO_TRADES
+
+
+def test_whitespace_only_note_is_not_counted_as_written(logged_in, user):
+    """Follow-ups 29c: a note of only spaces/newlines loses nothing, so the dialog must not
+    count it as a written note."""
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    journal(user, batch, note=" \n\t ")
+    journal(user, batch, note="real")
+    ctx = logged_in.get(confirm_url(batch.pk)).context
+    assert (ctx["journal_count"], ctx["noted_count"]) == (2, 1)
+
+
+def test_too_many_query_fields_on_the_confirm_read_as_no_query(logged_in, user):
+    """Follow-ups 29b: over DATA_UPLOAD_MAX_NUMBER_FIELDS is ignored, never a 400."""
+    batch = uploaded(logged_in, csv_bytes(*[rows(i) for i in range(11)]))
+    journal(user, batch, n=21)
+
+    resp = logged_in.get(confirm_url(batch.pk) + "?all=1&from=banner&" + "a=1&" * 2000)
+
+    assert resp.status_code == 200
+    assert len(resp.context["journal_list"]) == 20 and not resp.context["from_banner"]
 
 
 def test_checkbox_label_singular_and_no_notes(logged_in, user):
@@ -429,7 +557,7 @@ def test_htmx_post_stale_rerenders_the_dialog_body(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1))
     journal(user, batch)
 
-    resp = post_delete(logged_in, batch.pk, count=0, headers=HTMX)
+    resp = post_delete(logged_in, batch.pk, headers=HTMX)
 
     assert resp.status_code == 200
     assert [t.name for t in resp.templates][0] == "journal/partials/delete_confirm.html"

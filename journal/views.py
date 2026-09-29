@@ -55,6 +55,7 @@ SORTS = {  # column -> (direction on first click, visually hidden text per direc
     "pnl": ("desc", {"desc": copy.SORTED_HIGHEST, "asc": copy.SORTED_LOWEST}),
 }
 DEFAULT_SORT = "opened"
+TRADES_CEILING = 1000  # _user_trades' ponytail: past this, time for pagination (follow-ups 30)
 
 
 def _user_trades(user):
@@ -63,8 +64,8 @@ def _user_trades(user):
 
     ponytail: loads and matches every execution in Python on each request, no pagination.
     Query count is constant, but memory/CPU are linear and unbounded. Add pagination or move
-    the aggregation to SQL past ~1,000 trades, or when the render-time budget in
-    docs/product/features/import-and-list.md section 6 is missed.
+    the aggregation to SQL past TRADES_CEILING trades (trades() logs a warning then), or when
+    the render-time budget in docs/product/features/import-and-list.md section 6 is missed.
     """
     return derive_trades(Execution.objects.for_user(user).order_by("executed_at", "id"))
 
@@ -83,11 +84,17 @@ def _sorted(trades, sort, direction):
     return closed + [t for t in newest if t.is_open]
 
 
-def _sort_params(request):
+def _query(request):
+    """request.GET; past DATA_UPLOAD_MAX_NUMBER_FIELDS it reads as empty, so a garbage
+    query string gets the defaults, never an error page."""
     try:
-        query = request.GET
-    except TooManyFieldsSent:  # garbage query string: the default sort, never an error page
-        query = {}
+        return request.GET
+    except TooManyFieldsSent:
+        return {}
+
+
+def _sort_params(request):
+    query = _query(request)
     sort_dir = query.get("sort_dir")  # mobile <select>: one "column_direction" value (5.2)
     if sort_dir in dict(copy.SORT_OPTIONS):
         sort, _, direction = sort_dir.partition("_")
@@ -186,6 +193,8 @@ def trades(request):
     No pagination or filters in slice 1 (import-and-list.md section 2)."""
     user = request.user
     derived = _user_trades(user)
+    if len(derived) > TRADES_CEILING:  # every request past it, until pagination ships
+        log.warning("trades list past its %d ceiling: %d trades", TRADES_CEILING, len(derived))
     sort, direction = _sort_params(request)
     show_account = len({t.account_label for t in derived}) >= 2
     zone = timezone.get_current_timezone_name()
@@ -310,13 +319,14 @@ def imports(request):
         )
         .order_by("-uploaded_at", "-pk")
     )
-    page = Paginator(batches, IMPORTS_PER_PAGE).get_page(request.GET.get("page"))
+    query = _query(request)
+    page = Paginator(batches, IMPORTS_PER_PAGE).get_page(query.get("page"))
     page.object_list = list(page.object_list)
     for batch in page.object_list:
         batch.needs_attention = batch.failed_count > 0 or batch.has_conflicts
     context = {**_form_context(user, form), "page_obj": page}
     # Design 1 and 3.4: after a delete the Account field is open; focused only from a banner.
-    arrived_from = request.GET.get("from")
+    arrived_from = query.get("from")
     context["account_open"] = context["account_open"] or arrived_from in ("delete", "banner")
     context["focus_account"] = arrived_from == "banner"
     response = render(request, "journal/import_list.html", context)
@@ -462,7 +472,8 @@ def import_detail(request, pk):
     label = _label_of(user, batch) if counts[IMPORTED] else None
 
     values = ([NEEDS_ATTENTION] if counts[NEEDS_ATTENTION] else []) + [ALL, *STATUSES]
-    status = request.GET.get("status")
+    query = _query(request)
+    status = query.get("status")
     if status not in values:  # unknown or absent: the design's default, silently
         status = NEEDS_ATTENTION if counts[NEEDS_ATTENTION] else ALL
     base = reverse("import_detail", args=[batch.pk])
@@ -485,7 +496,7 @@ def import_detail(request, pk):
         shown = rows.order_by("line_number")
     else:
         shown = rows.filter(status=status).order_by("line_number")
-    page = Paginator(shown, ROWS_PER_PAGE).get_page(request.GET.get("page"))
+    page = Paginator(shown, ROWS_PER_PAGE).get_page(query.get("page"))
     total = page.paginator.count
 
     context = {
@@ -609,12 +620,16 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
     entries = JournalEntry.objects.for_user(user).filter(
         opening_execution__raw_import_row__import_batch=batch
     )
-    totals = entries.aggregate(n=Count("pk"), m=Count("pk", filter=~Q(note="")))
+    totals = entries.aggregate(
+        n=Count("pk"), m=Count("pk", filter=~Q(note__regex=r"^\s*$")), newest=Max("pk")
+    )
     n, m = totals["n"], totals["m"]
+    if notice == import_copy.DELETE_NOT_TICKED and not n:
+        notice = import_copy.DELETE_STALE  # the entries went elsewhere: there is no box to tick
     listed = entries.select_related("opening_execution").order_by(
         "opening_execution__executed_at", "pk"
     )
-    show_all = request.GET.get("all") == "1"
+    show_all = _query(request).get("all") == "1"
     if not show_all:
         listed = listed[:JOURNAL_PREVIEW]
     show_all_url = None
@@ -627,7 +642,8 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
         "trade_count": trade_count,
         "other_rows_count": other_rows,
         "journal_count": n,
-        "shown_token": _shown_signer(user.pk, batch.pk).sign(str(n)),  # posted back as `shown`
+        # Posted back as `shown`: the newest entry pk on screen (0 = none), not the count (29d).
+        "shown_token": _shown_signer(user.pk, batch.pk).sign(str(totals["newest"] or 0)),
         "noted_count": m,
         "journal_list": [
             {
@@ -658,15 +674,14 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
 
 
 def _shown_signer(user_id, pk) -> signing.Signer:
-    """Trust boundary for the stale-count guard: the count the user saw travels in the form
-    as a signed token bound to user and batch. A plain client-posted count has no upper
-    bound, so an inflated value would make delete_import_batch's check never fire; a
-    session value gets overwritten by any other tab's GET. A replayed old token can only
-    be lower than the real count, which fails safe (StaleConfirm)."""
-    return signing.Signer(salt=f"import-delete-shown:{user_id}:{pk}")
+    """The newest journal-entry pk the user was shown, signed and bound to user and batch
+    (a plain form value could be inflated past the stale check). A forged, replayed or
+    missing token only lowers it, which fails safe (StaleConfirm)."""
+    return signing.Signer(salt=f"import-delete-max-pk:{user_id}:{pk}")
 
 
-def _shown_count(user_id, pk, token) -> int:
+def _shown_max_pk(user_id, pk, token) -> int:
+    """The signed newest pk shown, 0 for none or a bad token."""
     try:
         return int(_shown_signer(user_id, pk).unsign(token or ""))
     except (signing.BadSignature, ValueError):
@@ -692,17 +707,18 @@ def import_delete(request, pk):
     """ADR-0005: GET renders the confirm and never deletes; POST deletes. htmx gets the
     dialog body partial; without JS the same body renders as a full page."""
     user = request.user
-    source = request.POST if request.method == "POST" else request.GET
+    # POST is read raw: CsrfViewMiddleware parses it first and 400s on too many fields.
+    source = request.POST if request.method == "POST" else _query(request)
     from_banner = source.get("from") == "banner"
     notice = None
     if request.method == "POST":
-        shown = _shown_count(user.pk, pk, request.POST.get("shown"))
-        ticked = request.POST.get("confirm") == "on"
-        if shown and not ticked:
+        shown_pk = _shown_max_pk(user.pk, pk, source.get("shown"))
+        ticked = source.get("confirm") == "on"
+        if shown_pk and not ticked:
             notice = import_copy.DELETE_NOT_TICKED  # the server enforces the box too
         else:
             try:
-                result = delete_import_batch(user, pk, confirmed_journal_count=shown)
+                result = delete_import_batch(user, pk, confirmed_max_pk=shown_pk)
             except ImportBatch.DoesNotExist:
                 return _gone(request, pk, import_copy.DELETE_ALREADY_GONE)
             except StaleConfirm:

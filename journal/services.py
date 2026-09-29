@@ -6,6 +6,7 @@ Also the batch delete, ADR-0005 section 3.
 """
 
 import hashlib
+import logging
 from dataclasses import dataclass
 
 from django.db import IntegrityError, transaction
@@ -18,6 +19,8 @@ from journal.models import (
     JournalEntry,
     RawImportRow,
 )
+
+log = logging.getLogger(__name__)
 
 BROKER = "topstep"
 _COMPARED = ("symbol", "side", "quantity", "price", "executed_at")  # fees left out on purpose
@@ -113,7 +116,7 @@ def _write(user, filename, file_bytes, label, parsed) -> ImportBatch:
 
 
 class StaleConfirm(Exception):
-    """More journal entries than the user confirmed would go; nothing was deleted."""
+    """A journal entry the user was not shown would go; nothing was deleted."""
 
 
 @dataclass(frozen=True)
@@ -122,19 +125,31 @@ class DeleteResult:
     journal_count: int
 
 
-def delete_import_batch(user, batch_id, confirmed_journal_count: int) -> DeleteResult:
+def delete_import_batch(user, batch_id, confirmed_max_pk: int) -> DeleteResult:
     """ADR-0005 section 3. Raises ImportBatch.DoesNotExist for a missing or someone else's
-    id, StaleConfirm (all rolled back) if more journal entries exist than were confirmed.
-
-    confirmed_journal_count must come from a source the caller trusts (see the view: it is
-    read from the server-side session, not the client-posted form field, so an inflated
-    client value can't make this check (n > confirmed) fail to fire)."""
-    with transaction.atomic():
-        batch = ImportBatch.objects.for_user(user).defer("raw_file").get(pk=batch_id)
-        execs = Execution.objects.for_user(user).filter(raw_import_row__import_batch=batch)
-        n, _ = JournalEntry.objects.for_user(user).filter(opening_execution__in=execs).delete()
-        if n > confirmed_journal_count:
-            raise StaleConfirm
-        execs.delete()
-        batch.delete()  # CASCADE raw rows; SET_NULL on execution is now a no-op
+    id, StaleConfirm (all rolled back) if the batch has a journal entry the user was not
+    shown. confirmed_max_pk is the newest entry pk shown (0 = none) and must come from a
+    source the caller trusts (the view's signed token), or an inflated value defeats this."""
+    try:
+        with transaction.atomic():
+            batch = ImportBatch.objects.for_user(user).defer("raw_file").get(pk=batch_id)
+            execs = Execution.objects.for_user(user).filter(raw_import_row__import_batch=batch)
+            entries = JournalEntry.objects.for_user(user).filter(opening_execution__in=execs)
+            # Delete only what was confirmed, then refuse if anything is left (follow-ups 29d):
+            # a newer entry committed before exists() is seen here; one committed after it is
+            # blocked by the RESTRICT FK on opening_execution when execs.delete() runs.
+            # ponytail: max pk misses (a) an UPDATE that re-points an older entry into this batch
+            # (ADR-0003 manual correction, not built yet) and (b) a lower pk committing after a
+            # higher one (Postgres sequences are non-transactional; concurrent same-user
+            # inserts). Fix for both: sign a hash of the sorted shown pk set instead.
+            n, _ = entries.filter(pk__lte=confirmed_max_pk).delete()
+            if entries.exists():
+                raise StaleConfirm
+            execs.delete()
+            batch.delete()  # CASCADE raw rows; SET_NULL on execution is now a no-op
+    except IntegrityError as exc:  # RestrictedError from execs.delete(), or the deferred FK
+        # at commit: an entry arrived mid-delete and the atomic rolled back. Broad on purpose
+        # (the commit-time error is not a RestrictedError), so log the class: never silent.
+        log.warning("import delete refused as stale: %s", type(exc).__name__)  # class only
+        raise StaleConfirm from exc
     return DeleteResult(trade_count=batch.imported_count, journal_count=n)
