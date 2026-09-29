@@ -36,10 +36,10 @@
 
   <form method="post" action="{% url 'import_delete' batch.pk %}"{% if not page %} hx-post="{% url 'import_delete' batch.pk %}" hx-target="#delete-confirm" hx-swap="outerHTML"{% endif %} class="space-y-4">
     {% csrf_token %}
-    <input type="hidden" name="journal_count" value="{{ journal_count }}">
+    <input type="hidden" name="shown" value="{{ shown_token }}">
     {% if from_banner %}<input type="hidden" name="from" value="banner">{% endif %}
     {% if notice == not_ticked and checkbox_label %}
-    <p role="status" tabindex="-1" class="flex items-start gap-2 font-medium"{% if not checkbox_label %} autofocus{% endif %}><span class="text-info">{% include "partials/icon.html" with name="info" %}</span><span>{{ notice }}</span></p>
+    <p role="status" tabindex="-1" class="flex items-start gap-2 font-medium"><span class="text-info">{% include "partials/icon.html" with name="info" %}</span><span>{{ notice }}</span></p>
     {% endif %}
     {% if checkbox_label %}
     <label for="delete-tick" class="flex min-h-[44px] cursor-pointer items-start gap-3">

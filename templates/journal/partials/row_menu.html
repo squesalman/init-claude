@@ -3,6 +3,6 @@
   <summary aria-label="Actions for {{ b.filename }}" class="btn-secondary w-11 px-0"><span aria-hidden="true">…</span></summary>
   <ul class="mt-1 min-w-[12rem] rounded border border-border bg-surface-raised py-1 text-left">
     <li><a href="{% url 'import_detail' b.pk %}" class="menu-item">View details</a></li>
-    <li><a href="{% url 'import_delete' b.pk %}" hx-get="{% url 'import_delete' b.pk %}" hx-target="#delete-dialog-body" data-opens-dialog class="menu-item menu-item-danger">{% include "partials/icon.html" with name="trash" %}<span>{{ copy.DELETE_ACTION }}</span></a></li>
+    <li>{% url 'import_delete' b.pk as del_url %}{% include "journal/partials/delete_link.html" with url=del_url cls="menu-item menu-item-danger" icon=True %}</li>
   </ul>
 </details>

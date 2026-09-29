@@ -15,6 +15,7 @@ from journal import copy
 from journal.models import JournalEntry
 from journal.test_delete_views import confirm_url, journal, post_delete, rows
 from journal.test_import_views import T1, T1_CHANGED, T2, T3, csv_bytes, detail, uploaded
+from journal.views import _shown_count
 
 HTMX = {"HX-Request": "true"}
 BLANK_BANNER = (
@@ -50,7 +51,11 @@ def delete_links(markup, pk):
 # --- confirm body: variants (3.3) -------------------------------------------------------------
 
 
-def test_simple_variant_has_no_checkbox_focuses_cancel_and_says_permanent(logged_in):
+def _shown(d, user, batch):
+    return _shown_count(user.pk, batch.pk, d.one("input", name="shown")["value"])
+
+
+def test_simple_variant_has_no_checkbox_focuses_cancel_and_says_permanent(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1))
     markup = body(logged_in.get(confirm_url(batch.pk), headers=HTMX))
     d = Doc(markup)
@@ -58,7 +63,7 @@ def test_simple_variant_has_no_checkbox_focuses_cancel_and_says_permanent(logged
     assert not d.all("input", type="checkbox")
     assert d.one("a", **{"data-cancel": ""})["autofocus"] == ""
     assert copy.DELETE_PERMANENT in d.text and copy.DELETE_BUTTON in d.text
-    assert d.one("input", name="journal_count")["value"] == "0"
+    assert _shown(d, user, batch) == 0
     form = d.one("form")
     assert form["hx-post"] == confirm_url(batch.pk) and form["hx-target"] == "#delete-confirm"
     assert d.one("h2", id="delete-title")
@@ -104,7 +109,7 @@ def test_two_step_variant_lists_entries_in_a_labelled_region_and_gates_on_the_ti
     assert root["x-data"] == "deleteConfirm"
     assert root["data-live-on"] == copy.DELETE_LIVE_ENABLED
     assert root["data-live-off"] == copy.DELETE_LIVE_DISABLED
-    assert d.one("input", name="journal_count")["value"] == "2"
+    assert _shown(d, user, batch) == 2
     assert copy.DELETE_BUTTON_WITH_ENTRIES in d.text
     assert_every_input_is_labelled(d)
 
@@ -157,7 +162,7 @@ def test_stale_notice_is_on_top_focused_and_the_box_is_unticked(logged_in, user)
     assert notice["role"] == "status" and notice["tabindex"] == "-1" and "autofocus" in notice
     assert markup.index(copy.DELETE_STALE) < markup.index('id="delete-desc"')
     assert "checked" not in d.one("input", type="checkbox")
-    assert d.one("input", name="journal_count")["value"] == "2"
+    assert _shown(d, user, batch) == 2
 
 
 def test_from_banner_is_posted_back(logged_in):

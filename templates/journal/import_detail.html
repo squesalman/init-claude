@@ -4,13 +4,13 @@
 {% block title %}{{ batch.filename }}{% endblock %}
 {% block content %}
 {% get_current_timezone as tz %}
-{% url 'import_delete' batch.pk as delete_url %}
+{% url 'import_delete' batch.pk as delete_url %}{% with banner_delete_url=delete_url|add:'?from=banner' %}
 <a href="{% url 'imports' %}" class="inline-flex min-h-[44px] items-center gap-1"><span aria-hidden="true">←</span>{{ copy.BACK_TO_IMPORTS }}</a>
 <div class="flex flex-wrap items-start justify-between gap-3">
   {# tabindex=-1: focus lands here when the dialog's opener is gone (design 7). #}
   <h1 tabindex="-1" class="text-title font-semibold break-all" title="{{ batch.filename }}">{% include "journal/partials/filename.html" with name=batch.filename %}</h1>
   {# Delete controls open the ConfirmDialog; without JS they are links to the confirm page. #}
-  <a href="{{ delete_url }}" hx-get="{{ delete_url }}" hx-target="#delete-dialog-body" data-opens-dialog class="btn-danger">{{ copy.DELETE_ACTION }}</a>
+  {% include "journal/partials/delete_link.html" with url=delete_url cls="btn-danger" %}
 </div>
 <p class="mt-1 text-text-muted">Uploaded {{ batch.uploaded_at|date:"M j, Y, g:i A" }} ({{ tz }})</p>
 <p class="mt-1 flex flex-wrap gap-x-6"><span>{{ copy.BROKER_LABEL }}: Topstep</span><span class="break-words">{{ account_line }}</span></p>
@@ -22,7 +22,7 @@
   <div>
     <h2 class="font-semibold">{{ conflict_banner.title }}</h2>
     <p class="mt-1 break-words">{{ conflict_banner.body }}</p>
-    {% if conflict_banner.body != copy.CONFLICT_BODY_NOT_RECORDED %}<p class="mt-3"><a href="{{ delete_url }}?from=banner" hx-get="{{ delete_url }}?from=banner" hx-target="#delete-dialog-body" data-opens-dialog class="btn-danger">{{ copy.DELETE_ACTION }}</a></p>{% endif %}
+    {% if conflict_banner.body != copy.CONFLICT_BODY_NOT_RECORDED %}<p class="mt-3">{% include "journal/partials/delete_link.html" with url=banner_delete_url cls="btn-danger" %}</p>{% endif %}
   </div>
 </div>
 {% endif %}
@@ -32,7 +32,7 @@
   <div>
     <h2 class="font-semibold">{{ hint.title }}</h2>
     <p class="mt-1 break-words">{{ hint.text }}</p>
-    <p class="mt-3 flex flex-wrap gap-3">{% if not conflict_banner %}<a href="{{ delete_url }}?from=banner" hx-get="{{ delete_url }}?from=banner" hx-target="#delete-dialog-body" data-opens-dialog class="btn-danger">{{ copy.DELETE_ACTION }}</a>{% endif %}<a href="{{ hint.url }}" class="btn-secondary">{{ hint.link_text }}</a></p>
+    <p class="mt-3 flex flex-wrap gap-3">{% if not conflict_banner %}{% include "journal/partials/delete_link.html" with url=banner_delete_url cls="btn-danger" %}{% endif %}<a href="{{ hint.url }}" class="btn-secondary">{{ hint.link_text }}</a></p>
   </div>
 </div>
 {% endif %}
@@ -55,4 +55,5 @@
 
 {% include "journal/partials/import_rows.html" %}
 {% include "journal/partials/delete_dialog.html" %}
+{% endwith %}
 {% endblock %}

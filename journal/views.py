@@ -2,6 +2,7 @@ import logging
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core import signing
 from django.core.exceptions import TooManyFieldsSent
 from django.core.paginator import Paginator
 from django.db import DatabaseError
@@ -609,11 +610,6 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
     )
     totals = entries.aggregate(n=Count("pk"), m=Count("pk", filter=~Q(note="")))
     n, m = totals["n"], totals["m"]
-    # Trust boundary for the stale-count guard: a client-posted journal_count has no upper
-    # bound, so an inflated POST value would make delete_import_batch's "n > confirmed"
-    # check never fire. Stash the count actually shown on *this* render in the session,
-    # keyed by batch, and read that back at POST time instead of the client's own field.
-    request.session[_shown_key(batch.pk)] = n
     listed = entries.select_related("opening_execution").order_by(
         "opening_execution__executed_at", "pk"
     )
@@ -629,7 +625,8 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
         "account_line": _account_line(_label_of(user, batch) if trade_count else None),
         "trade_count": trade_count,
         "other_rows_count": other_rows,
-        "journal_count": n,  # the form posts this back as journal_count
+        "journal_count": n,
+        "shown_token": _shown_signer(user.pk, batch.pk).sign(str(n)),  # posted back as `shown`
         "noted_count": m,
         "journal_list": [
             {
@@ -659,12 +656,20 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
     }
 
 
-def _shown_key(pk) -> str:
-    """Session key for the journal-entry count last shown to this user for this batch's
-    confirm dialog (see _delete_context). Never read the client's own journal_count POST
-    field for the StaleConfirm comparison — that value has no upper bound and an inflated
-    claim would make delete_import_batch's check never fire."""
-    return f"delete_shown_{pk}"
+def _shown_signer(user_id, pk) -> signing.Signer:
+    """Trust boundary for the stale-count guard: the count the user saw travels in the form
+    as a signed token bound to user and batch. A plain client-posted count has no upper
+    bound, so an inflated value would make delete_import_batch's check never fire; a
+    session value gets overwritten by any other tab's GET. A replayed old token can only
+    be lower than the real count, which fails safe (StaleConfirm)."""
+    return signing.Signer(salt=f"import-delete-shown:{user_id}:{pk}")
+
+
+def _shown_count(user_id, pk, token) -> int:
+    try:
+        return int(_shown_signer(user_id, pk).unsign(token or ""))
+    except (signing.BadSignature, ValueError):
+        return 0
 
 
 def _deleted_flash(result, from_banner) -> str:
@@ -690,7 +695,7 @@ def import_delete(request, pk):
     from_banner = source.get("from") == "banner"
     notice = None
     if request.method == "POST":
-        shown = request.session.get(_shown_key(pk), 0)  # trusted; see _delete_context
+        shown = _shown_count(user.pk, pk, request.POST.get("shown"))
         ticked = request.POST.get("confirm") == "on"
         if shown and not ticked:
             notice = import_copy.DELETE_NOT_TICKED  # the server enforces the box too
