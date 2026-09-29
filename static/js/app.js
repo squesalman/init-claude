@@ -111,7 +111,9 @@ document.addEventListener("keydown", (e) => {
 // Tab past the last item closes the menu.
 document.addEventListener("focusout", (e) => {
   const menu = e.target.closest && e.target.closest("details[data-menu][open]");
-  if (menu && !menu.contains(e.relatedTarget)) menu.open = false;
+  // Safari/Firefox on macOS don't focus a clicked link, so relatedTarget is null mid-click:
+  // while the pointer is over the menu, leave it open so the click lands.
+  if (menu && !menu.contains(e.relatedTarget) && !menu.matches(":hover")) menu.open = false;
 });
 
 // htmx request lifecycle: aria-busy on the region being replaced, the polite

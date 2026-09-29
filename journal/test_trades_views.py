@@ -99,17 +99,18 @@ def test_duration_buckets(seconds, text):
 @pytest.mark.parametrize("value, text", [
     ("80.0000000000", "80.00"), ("80.1500000000", "80.15"), ("80.0030000000", "80.003"),
     ("19850.2500000000", "19,850.25"), ("1.2345", "1.2345"), ("-37.6300000000", "-37.63"),
-    ("80.12345", "80.1234"),  # beyond 4 dp: half-even to 4 (display only)
+    ("1.08345", "1.08345"),  # 6E-style tick: never rounded away at display
+    ("80.1234567891", "80.1234567891"),
 ])
-def test_price_up_to_4dp_trimmed_min_2(value, text):
+def test_price_shows_stored_precision_trimmed_min_2(value, text):
     assert price(Decimal(value)) == text
 
 
 @pytest.mark.parametrize("value, text", [
     ("2.0000000000", "2"), ("1.5000000000", "1.5"), ("0.1250000000", "0.125"),
-    ("1000.0000000000", "1,000"),
+    ("1000.0000000000", "1,000"), ("0.0000012500", "0.00000125"),
 ])
-def test_quantity_up_to_4dp_trimmed(value, text):
+def test_quantity_shows_stored_precision_trimmed(value, text):
     assert quantity(Decimal(value)) == text
 
 

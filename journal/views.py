@@ -190,7 +190,8 @@ def trades(request):
     show_account = len({t.account_label for t in derived}) >= 2
     zone = timezone.get_current_timezone_name()
     # ponytail: slice 1 is USD-only (design doc); a non-USD closed trade would otherwise
-    # show as (n=0) on every card with no error. Warn instead of failing silently.
+    # show as (n=0) on every card with no error. Warn instead of failing silently. The trades
+    # table also hard-codes "$" via display.money; both go when a second currency ships.
     stats = compute_stats(derived)
     if set(stats) - {"USD"}:
         log.warning("non-USD closed trades present, not reflected in stat cards: %s", set(stats))
@@ -633,7 +634,7 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
                 "symbol": e.opening_execution.symbol,
                 "opened_at": e.opening_execution.executed_at,
                 "rules": _RULES[e.rules_followed],
-                "note": _short(e.note, 80),  # "" means no written note
+                "note": e.note,  # full text: the dialog tells users to copy it from here; "" = none
                 "url": None,  # no trade page yet (PR D)
             }
             for e in listed

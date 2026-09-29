@@ -238,6 +238,22 @@ out.esc = [menu.open, focused && focused.id];
 menu.open = true;
 fire("click", { target: { closest: () => null } });
 out.outside = menu.open;
+
+// Focus leaving the menu closes it, except mid-click on macOS Safari/Firefox (relatedTarget
+// null while the pointer is over the menu).
+let hovered = false;
+const item = {};
+const fm = { open: true, matches: (s) => s === ":hover" && hovered, contains: (n) => n === item };
+const inMenu = { closest: (s) => (s === "details[data-menu][open]" ? fm : null) };
+const blur = (relatedTarget, hover) => {
+  fm.open = true; hovered = hover;
+  fire("focusout", { target: inMenu, relatedTarget });
+  return fm.open;
+};
+out.focusout = {
+  null_hovered: blur(null, true), null_not_hovered: blur(null, false),
+  inside: blur(item, false), outside: blur({}, false),
+};
 console.log(JSON.stringify(out));
 """
 
@@ -274,3 +290,11 @@ def test_cancel_closes_the_dialog_and_a_failed_fetch_opens_the_full_page(dialog)
 def test_row_menu_closes_on_escape_and_outside_click(dialog):
     assert dialog["esc"] == [False, "summary"]
     assert dialog["outside"] is False
+
+
+@pytest.mark.parametrize(
+    "case, still_open",
+    [("null_hovered", True), ("null_not_hovered", False), ("inside", True), ("outside", False)],
+)
+def test_row_menu_focusout_closes_unless_focus_or_pointer_stays_in_it(dialog, case, still_open):
+    assert dialog["focusout"][case] is still_open

@@ -13,7 +13,7 @@ from django.contrib.auth import get_user_model
 from config.test_pages import Doc, assert_every_input_is_labelled
 from journal import copy
 from journal.models import JournalEntry
-from journal.test_delete_views import confirm_url, journal, post_delete, rows
+from journal.test_delete_views import LONG_NOTE, confirm_url, journal, post_delete, rows
 from journal.test_import_views import T1, T1_CHANGED, T2, T3, csv_bytes, detail, uploaded
 from journal.views import _shown_count
 
@@ -112,6 +112,14 @@ def test_two_step_variant_lists_entries_in_a_labelled_region_and_gates_on_the_ti
     assert _shown(d, user, batch) == 2
     assert copy.DELETE_BUTTON_WITH_ENTRIES in d.text
     assert_every_input_is_labelled(d)
+
+
+def test_long_note_renders_in_full_and_escaped(logged_in, user):
+    batch = uploaded(logged_in, csv_bytes(T1))
+    journal(user, batch, note=LONG_NOTE, rules=True)
+    markup = body(logged_in.get(confirm_url(batch.pk), headers=HTMX))
+    escaped = LONG_NOTE.replace("<", "&lt;").replace(">", "&gt;")
+    assert f"“{escaped}”" in markup  # whole note, no ellipsis: users copy it from here
 
 
 def test_more_than_20_entries_offer_show_all(logged_in, user):

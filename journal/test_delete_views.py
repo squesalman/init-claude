@@ -265,9 +265,12 @@ def test_7_bare_execution_delete_with_a_journal_entry_still_raises(logged_in, us
 # --- GET, CSRF, gone, stale links ----------------------------------------------------------
 
 
+LONG_NOTE = ("Waited for the <b>retest</b> " * 20)[:497] + "END"  # 500 chars, tail detectable
+
+
 def test_get_renders_the_confirm_and_never_deletes(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1, T2), label="Combine 50K")
-    journal(user, batch, note="n" * 100, rules=True)
+    journal(user, batch, note=LONG_NOTE, rules=True)
     journal(user, batch, note="", rules=None)
     before = snapshot()
 
@@ -284,7 +287,7 @@ def test_get_renders_the_confirm_and_never_deletes(logged_in, user):
     first, second = ctx["journal_list"]
     assert first["symbol"] and first["opened_at"] is not None
     assert first["rules"] == copy.RULES_FOLLOWED and second["rules"] == copy.RULES_NOT_ANSWERED
-    assert first["note"] == "n" * 80 + "…" and second["note"] == ""
+    assert first["note"] == LONG_NOTE and second["note"] == ""  # full: users copy it from here
     assert ctx["show_all_url"] is None
     assert ctx["checkbox_label"] == (
         "Also delete my 2 journal entries (1 with a written note). This can't be undone."

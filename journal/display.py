@@ -7,7 +7,7 @@ into a calculation. Decimal format specs are exact, no float at any step.
 from datetime import timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 
-_FOUR_DP = Decimal("0.0001")
+_TEN_DP = Decimal("0.0000000001")  # the stored precision (NUMERIC(20,10))
 
 
 def money(value: Decimal) -> str:
@@ -32,8 +32,8 @@ def duration(delta: timedelta) -> str:
 
 
 def _decimal(value: Decimal, min_dp: int) -> str:
-    """Up to 4 dp, thousands separator, trailing zeros trimmed down to min_dp."""
-    whole, frac = f"{value.quantize(_FOUR_DP, rounding=ROUND_HALF_EVEN):,.4f}".split(".")
+    """Up to the stored 10 dp, thousands separator, trailing zeros trimmed down to min_dp."""
+    whole, frac = f"{value.quantize(_TEN_DP, rounding=ROUND_HALF_EVEN):,.10f}".split(".")
     frac = frac.rstrip("0").ljust(min_dp, "0")
     return f"{whole}.{frac}" if frac else whole
 
