@@ -380,20 +380,6 @@ def test_too_many_query_fields_on_the_confirm_read_as_no_query(logged_in, user):
     assert len(resp.context["journal_list"]) == 20 and not resp.context["from_banner"]
 
 
-def test_too_many_post_fields_read_as_an_empty_form_and_delete_nothing(logged_in, user):
-    """Follow-ups 29b: an unreadable POST is an empty form (no token, no tick): with an
-    entry present that is stale, not a 400 and not a delete. In production
-    CsrfViewMiddleware reads POST first and 400s; this pins the view's own behaviour."""
-    batch = uploaded(logged_in, csv_bytes(T1))
-    journal(user, batch)
-    before = snapshot()
-
-    resp = logged_in.post(confirm_url(batch.pk), {f"a{i}": "1" for i in range(2000)})
-
-    assert resp.status_code == 200 and resp.context["notice"] == copy.DELETE_STALE
-    assert snapshot() == before
-
-
 def test_checkbox_label_singular_and_no_notes(logged_in, user):
     batch = uploaded(logged_in, csv_bytes(T1))
     journal(user, batch, note="")

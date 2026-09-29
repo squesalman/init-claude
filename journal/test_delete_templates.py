@@ -15,7 +15,7 @@ from journal import copy
 from journal.models import JournalEntry
 from journal.test_delete_views import LONG_NOTE, confirm_url, journal, post_delete, rows
 from journal.test_import_views import T1, T1_CHANGED, T2, T3, csv_bytes, detail, uploaded
-from journal.views import _shown_count
+from journal.views import _shown_max_pk
 
 HTMX = {"HX-Request": "true"}
 BLANK_BANNER = (
@@ -52,7 +52,7 @@ def delete_links(markup, pk):
 
 
 def _shown(d, user, batch):
-    return _shown_count(user.pk, batch.pk, d.one("input", name="shown")["value"])
+    return _shown_max_pk(user.pk, batch.pk, d.one("input", name="shown")["value"])
 
 
 def test_simple_variant_has_no_checkbox_focuses_cancel_and_says_permanent(logged_in, user):

@@ -172,8 +172,8 @@ def test_non_usd_closed_trade_logs_a_warning_instead_of_silently_dropping_from_t
 
 
 def test_more_than_1000_trades_logs_that_the_ceiling_is_passed(logged_in, user, caplog):
-    """Follow-ups 30: _user_trades' ponytail accepts ~1,000 trades per request; say so in
-    the log once a user passes it, instead of slowing down silently."""
+    """Follow-ups 30: _user_trades' ponytail accepts TRADES_CEILING (1,000) trades; every
+    request past it logs a warning, instead of slowing down silently."""
     make(user, *["1"] * 1000)
     with caplog.at_level("WARNING", logger="journal.views"):
         ctx(logged_in)

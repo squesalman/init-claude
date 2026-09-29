@@ -55,6 +55,7 @@ SORTS = {  # column -> (direction on first click, visually hidden text per direc
     "pnl": ("desc", {"desc": copy.SORTED_HIGHEST, "asc": copy.SORTED_LOWEST}),
 }
 DEFAULT_SORT = "opened"
+TRADES_CEILING = 1000  # _user_trades' ponytail: past this, time for pagination (follow-ups 30)
 
 
 def _user_trades(user):
@@ -63,8 +64,8 @@ def _user_trades(user):
 
     ponytail: loads and matches every execution in Python on each request, no pagination.
     Query count is constant, but memory/CPU are linear and unbounded. Add pagination or move
-    the aggregation to SQL past ~1,000 trades, or when the render-time budget in
-    docs/product/features/import-and-list.md section 6 is missed.
+    the aggregation to SQL past TRADES_CEILING trades (trades() logs a warning then), or when
+    the render-time budget in docs/product/features/import-and-list.md section 6 is missed.
     """
     return derive_trades(Execution.objects.for_user(user).order_by("executed_at", "id"))
 
@@ -83,11 +84,11 @@ def _sorted(trades, sort, direction):
     return closed + [t for t in newest if t.is_open]
 
 
-def _query(request, attr="GET"):
-    """request.GET (or .POST); past DATA_UPLOAD_MAX_NUMBER_FIELDS it reads as empty, so a
-    garbage query string gets the defaults, never an error page."""
+def _query(request):
+    """request.GET; past DATA_UPLOAD_MAX_NUMBER_FIELDS it reads as empty, so a garbage
+    query string gets the defaults, never an error page."""
     try:
-        return getattr(request, attr)
+        return request.GET
     except TooManyFieldsSent:
         return {}
 
@@ -192,8 +193,8 @@ def trades(request):
     No pagination or filters in slice 1 (import-and-list.md section 2)."""
     user = request.user
     derived = _user_trades(user)
-    if len(derived) > 1000:  # _user_trades' ponytail ceiling: time for pagination (follow-ups 30)
-        log.warning("trades list past its ~1,000 ceiling: %d trades", len(derived))
+    if len(derived) > TRADES_CEILING:  # every request past it, until pagination ships
+        log.warning("trades list past its %d ceiling: %d trades", TRADES_CEILING, len(derived))
     sort, direction = _sort_params(request)
     show_account = len({t.account_label for t in derived}) >= 2
     zone = timezone.get_current_timezone_name()
@@ -471,7 +472,8 @@ def import_detail(request, pk):
     label = _label_of(user, batch) if counts[IMPORTED] else None
 
     values = ([NEEDS_ATTENTION] if counts[NEEDS_ATTENTION] else []) + [ALL, *STATUSES]
-    status = request.GET.get("status")
+    query = _query(request)
+    status = query.get("status")
     if status not in values:  # unknown or absent: the design's default, silently
         status = NEEDS_ATTENTION if counts[NEEDS_ATTENTION] else ALL
     base = reverse("import_detail", args=[batch.pk])
@@ -494,7 +496,7 @@ def import_detail(request, pk):
         shown = rows.order_by("line_number")
     else:
         shown = rows.filter(status=status).order_by("line_number")
-    page = Paginator(shown, ROWS_PER_PAGE).get_page(request.GET.get("page"))
+    page = Paginator(shown, ROWS_PER_PAGE).get_page(query.get("page"))
     total = page.paginator.count
 
     context = {
@@ -672,17 +674,13 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
 
 
 def _shown_signer(user_id, pk) -> signing.Signer:
-    """Trust boundary for the stale guard: the newest journal-entry pk the user saw travels
-    in the form as a signed token bound to user and batch. A plain client-posted value has
-    no upper bound, so an inflated one would make delete_import_batch's check never fire; a
-    session value gets overwritten by any other tab's GET. pks only grow, so any entry
-    added since (even one that replaced a deleted entry) is above it and fails safe
-    (StaleConfirm). The salt changed with the count-to-pk switch, so a count token signed
-    before it no longer verifies."""
+    """The newest journal-entry pk the user was shown, signed and bound to user and batch
+    (a plain form value could be inflated past the stale check). A forged, replayed or
+    missing token only lowers it, which fails safe (StaleConfirm)."""
     return signing.Signer(salt=f"import-delete-max-pk:{user_id}:{pk}")
 
 
-def _shown_count(user_id, pk, token) -> int:
+def _shown_max_pk(user_id, pk, token) -> int:
     """The signed newest pk shown, 0 for none or a bad token."""
     try:
         return int(_shown_signer(user_id, pk).unsign(token or ""))
@@ -709,17 +707,18 @@ def import_delete(request, pk):
     """ADR-0005: GET renders the confirm and never deletes; POST deletes. htmx gets the
     dialog body partial; without JS the same body renders as a full page."""
     user = request.user
-    source = _query(request, "POST" if request.method == "POST" else "GET")
+    # POST is read raw: CsrfViewMiddleware parses it first and 400s on too many fields.
+    source = request.POST if request.method == "POST" else _query(request)
     from_banner = source.get("from") == "banner"
     notice = None
     if request.method == "POST":
-        shown = _shown_count(user.pk, pk, source.get("shown"))
+        shown_pk = _shown_max_pk(user.pk, pk, source.get("shown"))
         ticked = source.get("confirm") == "on"
-        if shown and not ticked:
+        if shown_pk and not ticked:
             notice = import_copy.DELETE_NOT_TICKED  # the server enforces the box too
         else:
             try:
-                result = delete_import_batch(user, pk, confirmed_max_pk=shown)
+                result = delete_import_batch(user, pk, confirmed_max_pk=shown_pk)
             except ImportBatch.DoesNotExist:
                 return _gone(request, pk, import_copy.DELETE_ALREADY_GONE)
             except StaleConfirm:
