@@ -919,7 +919,7 @@ def _journal_page(request, trade, form, saved, *, page_notice=None, **rules):
 
 
 @htmx_login_required
-@require_http_methods(["GET", "POST"])
+@require_http_methods(["GET", "HEAD", "POST"])
 def trade_journal(request, pk):
     user = request.user
     found = find_trade(user, pk)
@@ -951,6 +951,7 @@ def trade_journal(request, pk):
 def _journal_pk(request, target) -> int | None:
     """The trade pk in a `next` that is this host's journal URL, else None. Only the pk is
     kept: the redirect is rebuilt with reverse(), never the posted string (follow-ups 1)."""
+    target = (target or "").strip()  # the host check strips too; resolve() must see the same
     if not target or not url_has_allowed_host_and_scheme(
         target, allowed_hosts={request.get_host()}, require_https=request.is_secure()
     ):

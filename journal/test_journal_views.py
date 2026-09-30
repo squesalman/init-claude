@@ -534,6 +534,22 @@ def test_htmx_rules_database_error_keeps_the_text(logged_in, user):
     assert user.trading_rules == ""
 
 
+def test_no_js_rules_save_with_a_padded_next_still_returns_to_the_journal(logged_in, user):
+    """Review PR 11: the host check strips the URL but resolve() saw the padding, so a padded
+    next fell through to /trades/ (or a bare 400 on an invalid form)."""
+    opening, _ = closed_trade(user)
+
+    resp = logged_in.post("/rules/", {"trading_rules": "rules", "next": f" {url(opening.pk)} "})
+
+    assert resp.status_code == 302 and resp["Location"] == url(opening.pk)
+
+
+def test_journal_page_answers_head(logged_in, user):
+    opening, _ = closed_trade(user)
+
+    assert logged_in.head(url(opening.pk)).status_code == 200
+
+
 def test_no_js_rules_save_redirects_to_the_server_built_journal_url(logged_in, user):
     opening, _ = closed_trade(user)
 
