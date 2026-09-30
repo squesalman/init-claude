@@ -168,7 +168,7 @@
   .field .input-suffix-box input:not([type="hidden"]) { @apply mt-0 min-w-0 flex-1 rounded-r-none border-0; }
   .field .input-suffix-box:has(input[aria-invalid="true"]) { @apply border-2 border-attention; }
   .field .input-suffix-box input:focus-visible { outline: none; }
-  .field .input-suffix-box:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .field .input-suffix-box:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
   .input-suffix { @apply flex select-none items-center px-3 font-medium text-text-muted; }
   /* My rules (3.2): Add/Edit vs Close and the preview switch on details[open], no JS. */
   .rules-details > summary { list-style: none; }

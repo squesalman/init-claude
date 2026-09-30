@@ -4,8 +4,7 @@
 {% block width %}max-w-form{% endblock %}
 {% block flash_attrs %} tabindex="-1" autofocus{% endblock %}
 {% block content %}
-{% url 'trades' as trades_url %}
-<p><a href="{{ back_url }}" class="hidden min-h-[44px] items-center gap-1 sm:inline-flex">{% include "partials/icon.html" with name="arrow-left" %}{{ copy.JOURNAL_BACK }}</a><a href="{{ trades_url }}#trade-card-{{ trade.id }}" class="inline-flex min-h-[44px] items-center gap-1 sm:hidden">{% include "partials/icon.html" with name="arrow-left" %}{{ copy.JOURNAL_BACK }}</a></p>
+<p><a href="{{ back_url }}" class="hidden min-h-[44px] items-center gap-1 sm:inline-flex">{% include "partials/icon.html" with name="arrow-left" %}{{ copy.JOURNAL_BACK }}</a><a href="{{ back_url_card }}" class="inline-flex min-h-[44px] items-center gap-1 sm:hidden">{% include "partials/icon.html" with name="arrow-left" %}{{ copy.JOURNAL_BACK }}</a></p>
 
 {% include "journal/partials/trade_summary.html" %}
 
@@ -40,7 +39,7 @@
 
   <div class="action-bar">
     <button type="submit" class="btn-primary w-full sm:w-auto" data-busy="{{ copy.JOURNAL_SAVE_BUSY }}">{{ copy.JOURNAL_SAVE }}</button>
-    <a href="{{ back_url }}" class="hidden min-h-[44px] items-center sm:inline-flex">{{ copy.JOURNAL_BACK_TO_TRADES }}</a><a href="{{ trades_url }}#trade-card-{{ trade.id }}" class="flex min-h-[44px] items-center justify-center sm:hidden">{{ copy.JOURNAL_BACK_TO_TRADES }}</a>
+    <a href="{{ back_url }}" class="hidden min-h-[44px] items-center sm:inline-flex">{{ copy.JOURNAL_BACK_TO_TRADES }}</a><a href="{{ back_url_card }}" class="flex min-h-[44px] items-center justify-center sm:hidden">{{ copy.JOURNAL_BACK_TO_TRADES }}</a>
   </div>
 </form>
 {% endblock %}

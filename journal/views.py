@@ -912,6 +912,9 @@ def _journal_page(request, trade, form, saved, *, page_notice=None, **rules):
         "r_status": saved["r_status"],
         "notice": page_notice,
         "back_url": f"{reverse('trades')}#trade-{trade.opening_execution_id}",
+        # Mobile twin (design 3.1): the same list URL, anchored on the card, not the hidden row.
+        "back_url_card": f"{reverse('trades')}#trade-card-{trade.opening_execution_id}",
+        "exit_open_sr": copy.EXIT_OPEN_SR,  # journal.copy is the template's `copy`
         "error_summary_title": copy.SIGNUP_ERROR_SUMMARY_TITLE,  # design 12: reuse
         "copy": import_copy,
     }

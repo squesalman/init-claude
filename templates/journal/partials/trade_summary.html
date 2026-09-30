@@ -4,4 +4,4 @@
   <p class="flex items-center gap-3">{% include "journal/partials/result_badge.html" with result=trade.result %}<span class="whitespace-nowrap font-semibold tabular-nums{% if trade.result == "win" %} text-gain{% elif trade.result == "loss" %} text-loss{% endif %}">{{ trade.net_pnl|default:"Open" }}</span></p>
 </div>
 <p class="mt-1 text-text-muted tabular-nums">Opened {{ trade.opened }} ({{ trade.zone }})</p>
-<p class="mt-1 tabular-nums">Qty {{ trade.quantity }}{% if trade.entries %} · {{ trade.entries }}{% endif %} · {{ trade.entry }} to {{ trade.exit|default:"-" }} · {{ trade.duration|default:"Open" }}{% if trade.account %} · <span class="break-words">{{ trade.account }}</span>{% endif %}</p>
+<p class="mt-1 tabular-nums">Qty {{ trade.quantity }}{% if trade.entries %} · {{ trade.entries }}{% endif %} · {{ trade.entry }} to {% if trade.exit %}{{ trade.exit }}{% else %}<span aria-hidden="true">-</span><span class="sr-only">{{ exit_open_sr }}</span>{% endif %} · {{ trade.duration|default:"Open" }}{% if trade.account %} · <span class="break-words">{{ trade.account }}</span>{% endif %}</p>

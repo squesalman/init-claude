@@ -14,6 +14,7 @@ from django.conf import settings
 from accounts import copy as accounts_copy
 from config.test_pages import Doc
 from journal import copy
+from journal.forms import TEXT_LIMIT
 from journal.models import JournalEntry
 from journal.test_journal_views import HTMX, _with_r, body, closed_trade, fill, url
 
@@ -330,7 +331,7 @@ def test_note_and_rules_use_the_counter_component_with_no_maxlength(logged_in, u
     too_long = {c["data-too-long"] for c in counters}
     assert too_long == {copy.NOTE_TOO_LONG, copy.RULES_TOO_LONG}
     for c in counters:
-        assert (c["data-limit"], c["data-from"]) == ("10000", "9000")
+        assert (c["data-limit"], c["data-from"]) == (str(TEXT_LIMIT), "9000")
         assert c["data-counter"] == copy.COUNTER
         assert (c["data-near"], c["data-over"]) == (copy.COUNTER_LIVE_NEAR, copy.COUNTER_LIVE_OVER)
         assert (c["x-on:input"], c["x-on:focusout"]) == ("update", "leave")
@@ -506,3 +507,23 @@ def test_bundle_has_the_rules_preview_and_disclosure_rules():
         "details[open] .rules-action-close", "env(safe-area-inset-bottom)",
     ):
         assert needle in css, needle
+
+
+def test_open_trade_exit_has_screen_reader_text_on_the_journal_page(logged_in, user):
+    """Review PR 12: `copy` on the journal page is journal.copy, so EXIT_OPEN_SR rendered empty
+    and a screen reader heard the exit as a bare hyphen."""
+    opening = fill(user, "buy", qty="1", price="10")
+
+    markup = page(logged_in, opening.pk)
+
+    assert accounts_copy.EXIT_OPEN_SR in Doc(markup).text
+    assert re.search(r'sr-only">\s*' + re.escape(accounts_copy.EXIT_OPEN_SR), markup)
+
+
+def test_suffix_box_rings_on_keyboard_focus_only():
+    """Review PR 12: :focus-within rang the box on a mouse click; the app convention (and the
+    radio tile) is :focus-visible."""
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    assert ".input-suffix-box:has(input:focus-visible)" in css
+    assert ".input-suffix-box:focus-within" not in css
