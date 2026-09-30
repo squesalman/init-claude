@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{# Journal page (docs/design/journaling.md 3; ADR-0007 section 9 context). PR J2: working, unstyled markup; J3 makes it design-complete. Page order is fixed: back link, trade summary, intro, My rules panel (its own form, first in DOM, never nested), then the journal form (full POST + PRG, no htmx). #}
+{% block title %}{{ title }}{% endblock %}
+{% block width %}max-w-form{% endblock %}
+{% block flash_attrs %} tabindex="-1" autofocus{% endblock %}
+{% block content %}
+<p><a href="{{ back_url }}">{{ copy.JOURNAL_BACK }}</a></p>
+
+<h1>{{ trade.symbol }} {% if trade.direction == "long" %}Long{% else %}Short{% endif %}</h1>
+<p>{% include "journal/partials/result_badge.html" with result=trade.result %} {{ trade.net_pnl|default:"Open" }}</p>
+<p>Opened {{ trade.opened }} ({{ trade.zone }})</p>
+<p>Qty {{ trade.quantity }}{% if trade.entries %} · {{ trade.entries }}{% endif %} · {{ trade.entry }} to {{ trade.exit|default:"-" }} · {{ trade.duration|default:"Open" }}{% if trade.account %} · <span class="break-words">{{ trade.account }}</span>{% endif %}</p>
+
+<p>{{ copy.JOURNAL_INTRO }}</p>
+
+{% if notice %}<div tabindex="-1" autofocus>{% include "partials/notice.html" with variant=notice.variant body=notice.text %}</div>{% endif %}
+
+{% include "journal/partials/rules_panel.html" %}
+
+<form method="post" action="{% url 'trade_journal' trade.id %}" novalidate>
+  {% csrf_token %}
+  {% include "partials/error_summary.html" %}
+
+  <fieldset aria-describedby="{{ form.rules_followed.auto_id }}_helptext">
+    <legend>{{ form.rules_followed.label }}</legend>
+    <p id="{{ form.rules_followed.auto_id }}_helptext">{{ form.rules_followed.help_text }}</p>
+    {{ form.rules_followed }}
+    {% include "partials/field_errors.html" with field=form.rules_followed %}
+  </fieldset>
+
+  {% include "partials/field.html" with field=form.note %}
+
+  <details id="risk-details"{% if risk_open %} open{% endif %}>
+    <summary>{{ copy.RISK_SUMMARY }}</summary>
+    <p>{{ copy.RISK_INTRO }}</p>
+    {% include "partials/field.html" with field=form.stop_price %}
+    {% include "partials/field.html" with field=form.planned_risk_amount %}
+    <p id="risk-currency">{{ risk_currency }}</p>
+    {% if both_set %}<p>{{ copy.RISK_BOTH_SET }}</p>{% endif %}
+  </details>
+  {% if r_status %}<p>{{ r_status }}</p>{% endif %}
+
+  <p>
+    <button type="submit" class="btn-primary" data-busy="{{ copy.JOURNAL_SAVE_BUSY }}">{{ copy.JOURNAL_SAVE }}</button>
+    <a href="{{ back_url }}">{{ copy.JOURNAL_BACK_TO_TRADES }}</a>
+  </p>
+</form>
+{% endblock %}

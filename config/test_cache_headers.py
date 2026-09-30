@@ -43,6 +43,36 @@ def test_import_detail_is_private_no_store(client):
 
 
 @pytest.mark.django_db
+def test_journal_page_and_rules_posts_are_private_no_store(client):
+    """ADR-0007 test 9: the journal URL takes an id, so it can't join the list above."""
+    from django.utils import timezone
+
+    from journal.models import Execution
+
+    user = get_user_model().objects.create_user(email="cachejr@example.com", password="x")
+    opening = Execution.objects.create(
+        user=user, broker="manual", symbol="X", side="buy", quantity="1", price="1",
+        currency="USD", executed_at=timezone.now(), source=Execution.SOURCE_MANUAL,
+    )
+    client.force_login(user)
+    url = f"/trades/{opening.pk}/journal/"
+
+    responses = {
+        "journal GET": client.get(url),
+        "journal POST": client.post(url, {"note": "n"}),
+        "rules POST htmx": client.post(
+            "/rules/", {"trading_rules": "r", "next": url}, headers={"HX-Request": "true"}
+        ),
+        "rules POST": client.post("/rules/", {"trading_rules": "r", "next": url}),
+    }
+
+    assert responses["journal GET"].status_code == 200  # a 404 is no-store too; prove the page
+    for name, response in responses.items():
+        assert "no-store" in response["Cache-Control"], name
+        assert "private" in response["Cache-Control"], name
+
+
+@pytest.mark.django_db
 def test_anonymous_login_page_is_not_forced_to_no_store(client):
     response = client.get("/login/")
 

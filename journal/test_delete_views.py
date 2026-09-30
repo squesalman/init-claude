@@ -4,11 +4,13 @@ Spec: docs/adr/0005-batch-delete.md (decision + "Tests to write first", numbered
 docs/design/import-account-label.md 3.3, 3.4, 5. Synthetic data only.
 """
 
+from datetime import timedelta
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.db.models import QuerySet
+from django.db.models import Max, QuerySet
 from django.db.models.deletion import RestrictedError
 from django.test import Client
 from django.utils import dateformat, timezone
@@ -18,7 +20,7 @@ from journal import copy
 from journal.models import Execution, ImportBatch, JournalEntry, RawImportRow
 from journal.services import StaleConfirm, delete_import_batch
 from journal.test_import_views import T1, T2, csv_bytes, uploaded
-from journal.views import _shown_signer
+from journal.views import _shown_confirmed, _shown_signer
 
 User = get_user_model()
 HTMX = {"HX-Request": "true"}
@@ -81,9 +83,18 @@ def confirm_url(pk):
     return f"/imports/{pk}/delete/"
 
 
+def shown_token(user_id, pk, max_pk):
+    """What the dialog signs (ADR-0007 section 7): "<max_pk>:<max updated_at ISO>" over the
+    batch's entries up to max_pk, as if the dialog had shown exactly those."""
+    newest = JournalEntry.unscoped.filter(
+        user_id=user_id, pk__lte=max_pk, opening_execution__raw_import_row__import_batch_id=pk
+    ).aggregate(m=Max("updated_at"))["m"]
+    return _shown_signer(user_id, pk).sign(f"{max_pk}:{newest.isoformat() if newest else ''}")
+
+
 def post_delete(client, pk, max_pk=0, tick=False, headers=None, **extra):
     """max_pk: the newest journal-entry pk the dialog showed (0 = none shown)."""
-    token = _shown_signer(int(client.session["_auth_user_id"]), pk).sign(str(max_pk))
+    token = shown_token(int(client.session["_auth_user_id"]), pk, max_pk)
     data = {"shown": token, **extra}
     if tick:
         data["confirm"] = "on"
@@ -170,7 +181,7 @@ def test_4_service_rolls_back_the_journal_delete_on_a_stale_confirm(logged_in, u
     before = snapshot()
 
     with pytest.raises(StaleConfirm):
-        delete_import_batch(user, batch.pk, confirmed_max_pk=seen.pk)
+        delete_import_batch(user, batch.pk, seen.pk, seen.updated_at)
 
     assert snapshot() == before
 
@@ -195,7 +206,7 @@ def test_4f_service_refuses_a_swap_that_lands_inside_the_delete(logged_in, user,
     monkeypatch.setattr(QuerySet, "delete", delete_after_a_swap)
 
     with pytest.raises(StaleConfirm):
-        delete_import_batch(user, batch.pk, confirmed_max_pk=seen.pk)
+        delete_import_batch(user, batch.pk, seen.pk, seen.updated_at)
 
     assert swapped and ImportBatch.unscoped.filter(pk=batch.pk).exists()
 
@@ -229,7 +240,7 @@ def test_4g_service_turns_a_restrict_hit_mid_delete_into_stale(
 
     with caplog.at_level("WARNING", logger="journal.services"):
         with pytest.raises(StaleConfirm):
-            delete_import_batch(user, batch.pk, confirmed_max_pk=seen.pk)
+            delete_import_batch(user, batch.pk, seen.pk, seen.updated_at)
 
     assert added and snapshot() == before  # all rolled back, the late entry with it
     assert [r.getMessage() for r in caplog.records if r.name == "journal.services"] == [
@@ -323,6 +334,107 @@ def test_4c_honest_posted_token_still_deletes_normally(logged_in, user):
     assert not JournalEntry.unscoped.filter(pk__in=[e.pk for e in entries]).exists()
 
 
+# --- ADR-0007 section 7: the token also signs max(updated_at), so an edit reads as stale ------
+
+
+def test_4h_editing_a_shown_entry_after_the_confirm_deletes_nothing(logged_in, user):
+    """A note added in another tab to an entry the dialog showed as "(no written note)" must
+    not be lost unseen: max pk can't see an UPDATE, the signed updated_at can."""
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    (entry,) = journal(user, batch, note="")
+    page = Doc(logged_in.get(confirm_url(batch.pk)).content.decode())
+    # Explicit bump: auto_now could land on the same clock tick as the GET on Windows.
+    JournalEntry.unscoped.filter(pk=entry.pk).update(
+        note="written in another tab", updated_at=entry.updated_at + timedelta(seconds=1)
+    )
+    before = snapshot()
+
+    resp = logged_in.post(
+        confirm_url(batch.pk),
+        {"shown": page.one("input", name="shown")["value"], "confirm": "on"},
+    )
+
+    assert resp.status_code == 200 and resp.context["notice"] == copy.DELETE_STALE
+    assert snapshot() == before
+    assert JournalEntry.unscoped.get(pk=entry.pk).note == "written in another tab"
+
+
+def test_4h_a_real_journal_form_save_after_the_confirm_reads_as_stale(logged_in, user):
+    """Pins the link between the journal save and the guard: the save must move updated_at
+    (update_or_create adds auto_now fields to update_fields). now() is patched one second on,
+    so a same-tick Windows clock can't make the timestamps equal."""
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    (entry,) = journal(user, batch, note="")
+    page = Doc(logged_in.get(confirm_url(batch.pk)).content.decode())
+    later = entry.updated_at + timedelta(seconds=1)
+
+    with patch("django.utils.timezone.now", return_value=later):
+        saved = logged_in.post(
+            f"/trades/{entry.opening_execution_id}/journal/", {"note": "written later"}
+        )
+    assert saved.status_code == 302
+    before = snapshot()
+
+    resp = logged_in.post(
+        confirm_url(batch.pk),
+        {"shown": page.one("input", name="shown")["value"], "confirm": "on"},
+    )
+
+    assert resp.status_code == 200 and resp.context["notice"] == copy.DELETE_STALE
+    assert snapshot() == before
+    assert JournalEntry.unscoped.get(pk=entry.pk).note == "written later"
+
+
+def test_4h_service_refuses_an_entry_updated_after_the_confirmed_time(logged_in, user):
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    (entry,) = journal(user, batch)
+    shown_at = entry.updated_at
+    JournalEntry.unscoped.filter(pk=entry.pk).update(updated_at=shown_at + timedelta(seconds=1))
+    before = snapshot()
+
+    with pytest.raises(StaleConfirm):
+        delete_import_batch(user, batch.pk, entry.pk, shown_at)
+
+    assert snapshot() == before
+
+
+def test_4i_signed_old_format_token_fails_safe(logged_in, user):
+    """A token signed before this change carries only "<max_pk>". It reads as (0, None), so
+    even a genuinely signed old token plus the tick can never confirm a delete."""
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    (entry,) = journal(user, batch, note="keep me")
+    old = _shown_signer(user.pk, batch.pk).sign(str(entry.pk))
+    before = snapshot()
+
+    resp = logged_in.post(confirm_url(batch.pk), {"shown": old, "confirm": "on"})
+
+    assert resp.status_code == 200 and resp.context["notice"] == copy.DELETE_STALE
+    assert snapshot() == before
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["5", "5:", "5:not-a-time", "x:2026-09-30T12:00:00+00:00", ":2026-09-30T12:00:00+00:00",
+     "5:2026-09-30T12:00:00"],  # the last: a naive time is not what the dialog signs
+)
+def test_shown_confirmed_reads_bad_payloads_as_nothing_shown(payload):
+    token = _shown_signer(1, 2).sign(payload)
+
+    assert _shown_confirmed(1, 2, token) == (0, None)
+
+
+def test_shown_confirmed_round_trips_and_rejects_forged_or_rebound_tokens():
+    at = timezone.now()
+    token = _shown_signer(1, 2).sign(f"7:{at.isoformat()}")
+
+    assert _shown_confirmed(1, 2, token) == (7, at)
+    assert _shown_confirmed(1, 2, "0:" + at.isoformat()) == (0, None)  # unsigned
+    assert _shown_confirmed(9, 2, token) == (0, None)  # another user
+    assert _shown_confirmed(1, 3, token) == (0, None)  # another batch
+    assert _shown_confirmed(1, 2, None) == (0, None)
+    assert _shown_confirmed(1, 2, _shown_signer(1, 2).sign("0:")) == (0, None)  # none shown
+
+
 def test_5_isolation_other_user_gets_404_and_nothing_changes(logged_in, user, other):
     batch = uploaded(logged_in, csv_bytes(T1))
     (entry,) = journal(user, batch)
@@ -333,7 +445,7 @@ def test_5_isolation_other_user_gets_404_and_nothing_changes(logged_in, user, ot
     assert intruder.get(confirm_url(batch.pk)).status_code == 404
     assert post_delete(intruder, batch.pk, max_pk=entry.pk, tick=True).status_code == 404
     with pytest.raises(ImportBatch.DoesNotExist):
-        delete_import_batch(other, batch.pk, confirmed_max_pk=entry.pk)
+        delete_import_batch(other, batch.pk, entry.pk, entry.updated_at)
     assert snapshot() == before
 
 
@@ -343,7 +455,7 @@ def test_6_all_duplicate_batch_removes_no_executions(logged_in, user):
     assert again.imported_count == 0
     kept = set(batch_executions(user, first).values_list("pk", flat=True))
 
-    result = delete_import_batch(user, again.pk, confirmed_max_pk=0)
+    result = delete_import_batch(user, again.pk, 0, None)
 
     assert (result.trade_count, result.journal_count) == (0, 0)
     assert not ImportBatch.unscoped.filter(pk=again.pk).exists()
@@ -592,3 +704,19 @@ def test_imports_page_opens_account_after_any_delete_but_focuses_only_from_banne
     assert ctx["account_open"] and not ctx["focus_account"]
     ctx = logged_in.get("/imports/").context
     assert not ctx["account_open"] and not ctx["focus_account"]
+
+
+def test_4h_stale_refusal_rolls_back_the_deletes_of_the_other_confirmed_entries(logged_in, user):
+    """The stale check runs after the confirmed entries are deleted, so the rollback is what
+    keeps the untouched entry: one edited entry must not cost the other its row."""
+    batch = uploaded(logged_in, csv_bytes(T1, T2))
+    edited, untouched = journal(user, batch, n=2)
+    shown_at = max(edited.updated_at, untouched.updated_at)
+    JournalEntry.unscoped.filter(pk=edited.pk).update(updated_at=shown_at + timedelta(seconds=1))
+    before = snapshot()
+
+    with pytest.raises(StaleConfirm):
+        delete_import_batch(user, batch.pk, max(edited.pk, untouched.pk), shown_at)
+
+    assert snapshot() == before
+    assert JournalEntry.unscoped.filter(pk=untouched.pk).exists()

@@ -1,0 +1,2 @@
+{# JournalLink (docs/design/journaling.md 5.1-5.3): the state label is the link text; the accessible name adds the trade ("Add journal for MNQZ6, opened Sep 26, 2:31 PM"). journal_state is the icon key for J3. PR J2: unstyled. #}
+<a href="{{ t.journal_url }}" data-journal-state="{{ t.journal_state }}"><span aria-hidden="true">{{ t.journal_label }}</span><span class="sr-only">{{ t.journal_sr }}</span></a>

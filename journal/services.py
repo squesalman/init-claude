@@ -8,10 +8,12 @@ Also the batch delete, ADR-0005 section 3.
 import hashlib
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 
 from django.db import IntegrityError, transaction
 
 from journal.importers.topstep import ImportFileError, parse
+from journal.matching import Trade, derive_trades
 from journal.models import (
     MAX_RAW_FILE_BYTES,
     Execution,
@@ -125,11 +127,17 @@ class DeleteResult:
     journal_count: int
 
 
-def delete_import_batch(user, batch_id, confirmed_max_pk: int) -> DeleteResult:
-    """ADR-0005 section 3. Raises ImportBatch.DoesNotExist for a missing or someone else's
-    id, StaleConfirm (all rolled back) if the batch has a journal entry the user was not
-    shown. confirmed_max_pk is the newest entry pk shown (0 = none) and must come from a
-    source the caller trusts (the view's signed token), or an inflated value defeats this."""
+def delete_import_batch(
+    user, batch_id, confirmed_max_pk: int, confirmed_updated_at: datetime | None
+) -> DeleteResult:
+    """ADR-0005 section 3, amended by ADR-0007 section 7. Raises ImportBatch.DoesNotExist for
+    a missing or someone else's id, StaleConfirm (all rolled back) if the batch has a journal
+    entry the user was not shown, or one edited after it was shown. confirmed_max_pk and
+    confirmed_updated_at are the newest entry pk and updated_at shown (0 and None = none) and
+    must come from a source the caller trusts (the view's signed token), or an inflated value
+    defeats this."""
+    if confirmed_updated_at is None:
+        confirmed_max_pk = 0  # fail safe: nothing counts as shown
     try:
         with transaction.atomic():
             batch = ImportBatch.objects.for_user(user).defer("raw_file").get(pk=batch_id)
@@ -137,12 +145,18 @@ def delete_import_batch(user, batch_id, confirmed_max_pk: int) -> DeleteResult:
             entries = JournalEntry.objects.for_user(user).filter(opening_execution__in=execs)
             # Delete only what was confirmed, then refuse if anything is left (follow-ups 29d):
             # a newer entry committed before exists() is seen here; one committed after it is
-            # blocked by the RESTRICT FK on opening_execution when execs.delete() runs.
+            # blocked by the RESTRICT FK on opening_execution when execs.delete() runs. An entry
+            # edited after the confirm rendered (updated_at later than shown) is not deleted,
+            # so the same exists() check raises StaleConfirm and the atomic rolls back
+            # everything: nothing is deleted, as if it were checked before the delete.
             # ponytail: max pk misses (a) an UPDATE that re-points an older entry into this batch
             # (ADR-0003 manual correction, not built yet) and (b) a lower pk committing after a
             # higher one (Postgres sequences are non-transactional; concurrent same-user
             # inserts). Fix for both: sign a hash of the sorted shown pk set instead.
-            n, _ = entries.filter(pk__lte=confirmed_max_pk).delete()
+            confirmed = entries.filter(pk__lte=confirmed_max_pk)
+            if confirmed_updated_at is not None:
+                confirmed = confirmed.filter(updated_at__lte=confirmed_updated_at)
+            n, _ = confirmed.delete()
             if entries.exists():
                 raise StaleConfirm
             execs.delete()
@@ -153,3 +167,48 @@ def delete_import_batch(user, batch_id, confirmed_max_pk: int) -> DeleteResult:
         log.warning("import delete refused as stale: %s", type(exc).__name__)  # class only
         raise StaleConfirm from exc
     return DeleteResult(trade_count=batch.imported_count, journal_count=n)
+
+
+# --- Journaling (ADR-0007 section 6) ------------------------------------------------------------
+
+
+def find_trade(user, execution_id) -> tuple[Execution, Trade] | None:
+    """The trade this execution opened, or None for a missing id, another user's id, or a
+    fill that opens no trade (a closing fill). Derives only the opener's (label, symbol):
+    every matcher bucket sits inside that pair. Keep the order_by (follow-ups row 27)."""
+    opening = Execution.objects.for_user(user).filter(pk=execution_id).first()
+    if opening is None:
+        return None
+    executions = Execution.objects.for_user(user).filter(
+        broker_account_label=opening.broker_account_label, symbol=opening.symbol
+    ).order_by("executed_at", "id")
+    for trade in derive_trades(executions):
+        if trade.opening_execution_id == opening.pk:
+            return opening, trade
+    return None
+
+
+def save_journal_entry(
+    user, opening, trade, *, note, rules_followed, stop_price, planned_risk_amount
+) -> JournalEntry | None:
+    """Values come from a valid JournalEntryForm (its full_clean already ran). None = nothing
+    to save: every input blank and no entry yet, so no row is created (AC 5). Otherwise one
+    upsert: update_or_create is get_or_create (which re-reads the row after losing the UNIQUE
+    race, so a second tab updates the first tab's row, AC 8) plus a row lock for the update.
+    user= is explicit (for_user()'s filter is not carried into create()), and the opening
+    instance is passed so the cross-tenant guard costs no query."""
+    entries = JournalEntry.objects.for_user(user)
+    blank = note == "" and (rules_followed, stop_price, planned_risk_amount) == (None, None, None)
+    if blank and not entries.filter(opening_execution=opening).exists():
+        return None
+    fields = {
+        "note": note,
+        "stop_price": stop_price,
+        "planned_risk_amount": planned_risk_amount,
+        # Derived, never posted (domain section 3, vector 21); satisfies both currency CHECKs.
+        "risk_currency": trade.currency if planned_risk_amount is not None else None,
+    }
+    if rules_followed is not None:  # a missing answer never un-answers an entry (AC 7)
+        fields["rules_followed"] = rules_followed
+    entry, _ = entries.update_or_create(user=user, opening_execution=opening, defaults=fields)
+    return entry

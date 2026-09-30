@@ -71,9 +71,10 @@ def test_table_has_caption_scoped_headers_and_the_zone_in_opened(logged_in, user
     d = Doc(table_of(markup(logged_in)))
     assert "Your trades" in d.text
     heads = d.all("th", scope="col")
-    assert len(heads) == 9  # one account: no Account column
+    assert len(heads) == 10  # one account: no Account column; Journal is last (J2)
     assert "Opened (America/New_York)" in d.text
-    for word in ("Symbol", "Side", "Qty", "Entry", "Exit", "Duration", "Result", "Net P&L"):
+    for word in ("Symbol", "Side", "Qty", "Entry", "Exit", "Duration", "Result", "Net P&L",
+                 "Journal"):
         assert word in d.text
     assert "Account" not in d.text
 
@@ -85,7 +86,7 @@ def test_sort_headers_carry_aria_sort_links_and_hidden_sorted_text(logged_in, us
     assert [a["aria-sort"] for a in d.all("th") if "aria-sort" in a] == [
         "descending", "none", "none",
     ]
-    hrefs = [a["href"] for a in d.all("a")]
+    hrefs = [a["href"] for a in d.all("a") if a["href"].startswith("/trades/?")]
     assert hrefs == [
         "/trades/?sort=opened&dir=asc", "/trades/?sort=symbol&dir=asc",
         "/trades/?sort=pnl&dir=desc",
@@ -128,7 +129,7 @@ def test_account_column_and_card_line_only_for_two_labels(logged_in, user):
     make(user, "2", label="")
     text = markup(logged_in)
     d = Doc(table_of(text))
-    assert len(d.all("th", scope="col")) == 10 and "Account" in d.text
+    assert len(d.all("th", scope="col")) == 11 and "Account" in d.text
     assert "Combine 50K" in d.text and "no name" in d.text
     assert cards_of(text).count("Account:") == 2
     assert copy.ACROSS_ALL_ACCOUNTS in main_of(text)
