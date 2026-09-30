@@ -50,6 +50,12 @@ Statuses: **Accepted** (build from it) · **Draft** (don't build from it yet) ·
 | [schema](data/schema.md) | Living | Data dictionary for the merged schema. Must match `journal/models.py`. |
 | [follow-ups](data/follow-ups.md) | Living | Deferred work with triggers (rows 1-21). Owner of the file: orchestrator. |
 
+## Agents (`docs/agents/`, owner: orchestrator)
+| Doc | Status | Answers |
+|---|---|---|
+| [pipeline](agents/pipeline.mmd) | Living (mirrors CLAUDE.md) | Order agents run in for a feature. |
+| [ownership](agents/ownership.mmd) | Living (mirrors CLAUDE.md) | Which agent writes where; branch vs main; PR and merge flow. |
+
 ## Known conflicts
 None.
 

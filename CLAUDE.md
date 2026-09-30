@@ -60,6 +60,8 @@ Project subagents live in `.claude/agents/`. **The main session is the orchestra
 
 Model policy: only `backend-engineer` and `frontend-engineer` run on Opus 5.5 (`model: claude-opus-5-5` in their agent files); `architect` and `security-reviewer` stay on `opus`; the rest stay on `sonnet`. `code-review` is a skill, not an agent: it runs on the session's model, so run it from an Opus session.
 
+Diagrams of this setup: `docs/agents/pipeline.mmd` (run order) and `docs/agents/ownership.mmd` (who writes where). Change the roster or workflow here, then update both diagrams.
+
 ### Delegation workflow
 Default pipeline for a new feature — skip steps that don't apply:
 

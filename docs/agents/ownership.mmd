@@ -1,0 +1,23 @@
+%% Who writes where. Source: CLAUDE.md "Branching for code-writing agents" and "Delegation rules".
+flowchart LR
+    subgraph DOCS["Doc agents - write straight to main"]
+        PM[product-manager] --> D1["docs/product/"]
+        UX[ux-designer] --> D2["docs/design/"]
+        TD[trading-domain-expert] --> D3["docs/domain/"]
+        BA[behavior-analyst] --> D4["docs/behavior/"]
+        AR[architect] --> D5["docs/adr/"]
+        SEC["security-reviewer<br/>(read-only)"]
+    end
+
+    subgraph CODE["Code agents - worktree + branch, never main"]
+        DB["database-engineer<br/>schema, migrations, indexes, raw SQL"]
+        BE["backend-engineer<br/>app code that calls the DB"]
+        FE["frontend-engineer<br/>templates, htmx, Alpine, Tailwind"]
+        QA["qa-engineer<br/>tests"]
+    end
+
+    DB -. "no cross-edits: go via orchestrator or docs/" .- BE
+    CODE -->|"branch done"| ORCH["Orchestrator<br/>pushes branch, opens PR"]
+    ORCH --> REVIEW["code-review<br/>(user, separate session)"]
+    REVIEW --> M["Orchestrator merges to main<br/>after user says 'merge'"]
+    DOCS -. "specs read by" .-> CODE

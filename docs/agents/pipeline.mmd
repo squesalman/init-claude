@@ -1,0 +1,33 @@
+%% Delegation pipeline. Source: CLAUDE.md "Delegation workflow". Update both together.
+flowchart TD
+    O["Main session<br/>orchestrator (Opus)"]
+
+    subgraph SPEC["Spec and design - write to docs/ on main, no branch"]
+        PM[product-manager]
+        UX[ux-designer]
+        TD[trading-domain-expert]
+        BA[behavior-analyst]
+    end
+
+    AR["architect (opus)<br/>docs/adr/"]
+
+    subgraph BUILD["Build - own branch + worktree"]
+        DB[database-engineer]
+        BE["backend-engineer<br/>(opus 5.5)"]
+        FE["frontend-engineer<br/>(opus 5.5)"]
+        QA[qa-engineer]
+    end
+
+    SEC["security-reviewer (opus, read-only)<br/>before release, after auth/imports/data access"]
+    REV["PR review<br/>code-review skill, user runs it separately"]
+    MERGE["Orchestrator merges<br/>after user says 'merge'"]
+
+    O --> PM
+    PM --> UX & TD & BA
+    UX & TD & BA --> AR
+    AR --> DB
+    DB --> BE & FE
+    BE & FE --> QA
+    QA --> SEC
+    SEC --> REV
+    REV --> MERGE
