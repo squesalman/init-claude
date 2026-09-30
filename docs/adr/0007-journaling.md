@@ -226,9 +226,7 @@ Journal page (`journal/journal_form.html`):
 | `rules_open` | True only after a rules save, error or failure |
 | `rules_status` / `rules_notice` | `RULES_SAVED` / `RULES_SAVE_FAILED`, or None |
 | `rules_next` | this journal URL (hidden `next`) |
-| `risk_open` | a risk value saved, a risk error, or `multi_leg` |
-| `multi_leg` | `entry_lot_count > 1` |
-| `stop_help` | `STOP_HELP_LONG` / `STOP_HELP_SHORT` (formatted with the entry) / `STOP_HELP_MULTI_LEG` |
+| `risk_open` | a risk value saved or typed, a risk error, or `entry_lot_count > 1` |
 | `risk_currency` | trade currency (the suffix and `RISK_HELP`) |
 | `both_set` | both risk fields have a value in this render |
 | `r_status` | design 3.6 string from `r_multiple`'s reason, or None (no line for `no_risk_input`, and none when there is no entry with a risk value, unless the trade is open) |
@@ -350,3 +348,4 @@ Resolved (2026-09-30): ADR-0003 §6 now says RESTRICT, matching the code, `docs/
 ## Amendment (J2 as built, 2026-09-30; user accepted after advisor review)
 - **Save service (§6 step 2):** `JournalEntry.objects.for_user(user).update_or_create(user=user, opening_execution=opening, defaults=...)` replaces `get_or_create` plus `save()`. It is built on `get_or_create` (same UNIQUE-race re-read, AC 8) and adds a row lock. A missing yes/no is left out of `defaults`, so it never clears a saved answer. `updated_at` must stay in `update_fields`: the ADR-0005 stale guard depends on it (test_4h).
 - **Stale check (§7):** folded into the delete, not a separate query before it. The delete filters `pk <= max_pk` and `updated_at <= signed`, then the existing "anything left?" `exists()` raises `StaleConfirm` inside the same `atomic()`, which rolls back everything. Nothing is deleted on a stale confirm (test_4h, two-entry case included).
+- **Template contract (§9):** `multi_leg` and `stop_help` are not context keys. The per-trade stop and risk help is set as `help_text` on the fields inside `JournalEntryForm.__init__` (`STOP_HELP_LONG` / `STOP_HELP_SHORT` formatted with the entry / `STOP_HELP_MULTI_LEG`, and `RISK_HELP` with the currency), so the template renders `field.help_text` and the input's `aria-describedby` points at it on GET and on a POST re-render. `risk_open` also opens when a risk value was typed.
