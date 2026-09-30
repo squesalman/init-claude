@@ -19,9 +19,15 @@ from journal.models import JournalEntry
 
 pytestmark = pytest.mark.django_db
 
-LONG_50 = SimpleNamespace(direction="long", avg_entry_price=Decimal("50.00"), entry_lot_count=1)
-SHORT_50 = SimpleNamespace(direction="short", avg_entry_price=Decimal("50.00"), entry_lot_count=1)
-MULTI_LEG = SimpleNamespace(direction="long", avg_entry_price=Decimal("10.07"), entry_lot_count=2)
+LONG_50 = SimpleNamespace(
+    direction="long", avg_entry_price=Decimal("50.00"), entry_lot_count=1, currency="USD"
+)
+SHORT_50 = SimpleNamespace(
+    direction="short", avg_entry_price=Decimal("50.00"), entry_lot_count=1, currency="USD"
+)
+MULTI_LEG = SimpleNamespace(
+    direction="long", avg_entry_price=Decimal("10.07"), entry_lot_count=2, currency="USD"
+)
 
 
 def form(data, trade=LONG_50, instance=None):

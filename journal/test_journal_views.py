@@ -400,6 +400,20 @@ def test_stop_help_names_the_side_and_the_entry(logged_in, user):
     assert (c["trade"]["entries"], c["risk_currency"]) == (None, "USD")
 
 
+def test_stop_help_survives_a_post_error_re_render(logged_in, user):
+    """Review PR 11 (high pass): validation builds every BoundField before the view runs, so
+    help_text set in the view never rendered on a POST. It must come from the form itself."""
+    opening, _ = closed_trade(user, entry="19850.25", exit="19862.00")
+
+    resp = logged_in.post(url(opening.pk), {"stop_price": "19999"})  # wrong side of the entry
+
+    assert resp.status_code == 200
+    page = Doc(body(resp))
+    assert copy.STOP_HELP_LONG.format(entry="19,850.25") in page.text
+    assert copy.RISK_HELP.format(currency="USD") in page.text
+    assert "id_stop_price_helptext" in page.one("input", name="stop_price")["aria-describedby"]
+
+
 def test_open_trade_status_line_is_visible_without_opening_the_risk_section(logged_in, user):
     """Review PR 11: R_STATUS_TRADE_OPEN sat inside the collapsed <details> and was never seen."""
     opening = fill(user, "buy", qty="1", price="10")

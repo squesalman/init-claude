@@ -897,21 +897,8 @@ def _rules_context(user, rules_form=None, *, rules_open=False, status=None, noti
 def _journal_page(request, trade, form, saved, *, page_notice=None, **rules):
     """ADR-0007 section 9 contract. Uses no query, so a failed save can re-render."""
     multi_leg = trade.entry_lot_count > 1
-    side_help = import_copy.STOP_HELP_LONG if trade.direction == "long" else (
-        import_copy.STOP_HELP_SHORT
-    )
-    journal_url = reverse("trade_journal", args=[trade.opening_execution_id])
-    stop_help = import_copy.STOP_HELP_MULTI_LEG if multi_leg else side_help.format(
-        entry=display.price(trade.avg_entry_price)
-    )
-    # Per-trade help on the fields themselves, so the rendered input's aria-describedby
-    # points at it (design 3.5, 8). Set BEFORE the first form[name]: a BoundField snapshots
-    # help_text when it is first built and cached.
-    form.fields["stop_price"].help_text = stop_help
-    form.fields["planned_risk_amount"].help_text = import_copy.RISK_HELP.format(
-        currency=trade.currency
-    )
     risk_values = [form[name].value() for name in ("stop_price", "planned_risk_amount")]
+    journal_url = reverse("trade_journal", args=[trade.opening_execution_id])
     context = {
         "title": import_copy.JOURNAL_TITLE.format(symbol=trade.symbol),
         "trade": _trade_summary(trade),

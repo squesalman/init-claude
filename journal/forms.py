@@ -7,7 +7,7 @@ from django import forms
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 
-from journal import copy
+from journal import copy, display
 from journal.importers.topstep import FILE_NOT_RECOGNISED
 from journal.models import MAX_RAW_FILE_BYTES, JournalEntry, UserOwned
 from journal.services import FILE_TOO_LARGE
@@ -204,6 +204,18 @@ class JournalEntryForm(UserScopedModelForm):
     def __init__(self, *args, trade, **kwargs):
         super().__init__(*args, **kwargs)
         self.trade = trade
+        # Per-trade help lives on the fields, so every BoundField (GET, and validation on a
+        # POST, which builds them all before the view runs) carries it, and the rendered
+        # input's aria-describedby points at it (design 3.5, 8).
+        side_help = copy.STOP_HELP_LONG if trade.direction == "long" else copy.STOP_HELP_SHORT
+        self.fields["stop_price"].help_text = (
+            copy.STOP_HELP_MULTI_LEG
+            if trade.entry_lot_count > 1
+            else side_help.format(entry=display.price(trade.avg_entry_price))
+        )
+        self.fields["planned_risk_amount"].help_text = copy.RISK_HELP.format(
+            currency=trade.currency
+        )
 
     def clean_planned_risk_amount(self):
         value = self.cleaned_data["planned_risk_amount"]
