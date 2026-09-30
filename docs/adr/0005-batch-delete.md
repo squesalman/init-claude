@@ -71,8 +71,9 @@ B, concretely:
   **Amended 2026-09-30 ([ADR-0007](0007-journaling.md) §7):** the journal form can edit an entry after the
   confirm renders, which max pk can't see. The signed token also carries the newest `updated_at` shown
   (`"<max_pk>:<max_updated_at ISO>"`; an old-format, forged or missing token reads as `(0, None)` and fails
-  safe). Inside the transaction, before any delete, an entry in the batch with `updated_at` later than that
-  value raises `StaleConfirm`.
+  safe). Inside the transaction, an entry in the batch with `updated_at` later than that
+  value is not deleted, so the "anything left?" check raises `StaleConfirm` and the transaction rolls back
+  everything (as built in J2; see the ADR-0007 amendment).
   Known ceiling: an UPDATE that re-points an older entry into the batch (ADR-0003 manual correction,
   not built) is not caught by max pk. When that ships, sign a hash of the sorted shown pk set instead.
 
