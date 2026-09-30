@@ -75,7 +75,7 @@ Immutable by convention (never `UPDATE`d; corrections delete+recreate).
 | `price` | `NUMERIC(20,10)` | no | No non-negative `CHECK`. **Removed round-6 code review** (was `CHECK (price >= 0)` — `execution_price_nonnegative`): futures have traded/settled negative in real markets (WTI crude, CL, settled around -$37.63 on 2020-04-20), and this app targets futures brokers (Topstep). `quantity > 0` below is still correct and unaffected — direction lives in `side`, not price's sign. `CHECK (price <> 0)` — `execution_price_not_zero`, **added round-7 code review**: that same negative-price evidence doesn't extend to `price = 0` — $0 is essentially never a valid fill price and is almost certainly malformed data, unlike a real negative settlement |
 | `contract_multiplier` | `NUMERIC(20,10)` | no, default 1 | point value per contract, stored per fill so a contract-spec change never rewrites old P&L. `CHECK (contract_multiplier > 0)` — `execution_contract_multiplier_positive`, added round-3 code review: it's the P&L multiplier, so 0 or negative would silently corrupt every derived trade, and `quantity`/`price` in the same constraints list already had this protection while this column didn't |
 | `fees` | `NUMERIC(19,4)` | no, default 0 | total cost of this fill |
-| `currency` | `VARCHAR(3)` | no | ISO 4217, applies to `fees` and derived P&L. `CHECK (currency <> '')` — `execution_currency_not_blank`, added round-5 code review: unlike `quantity`/`price`/`contract_multiplier` in the same constraints list, `currency` had no non-empty guard at all (no `CheckConstraint`, no `full_clean()` call site on this write path), so a money-bearing execution could be saved with `currency=""`, silently violating CLAUDE.md's "store currency with every amount" |
+| `currency` | `VARCHAR(3)` | no | ISO 4217, applies to `fees` and derived P&L. non-blank is enforced by `execution_currency_iso_format` (`^[A-Z]{3}$`); the redundant `execution_currency_not_blank` was dropped in migration 0004 (follow-ups row 11) |
 | `executed_at` | `TIMESTAMPTZ` | no | UTC in DB, rendered in `user.timezone` |
 | `source` | `VARCHAR(8)` | no | `CHECK (source IN ('manual','import'))`. Derived from `SOURCE_CHOICES` the same way as `status` above (round-8 code review) — see that note |
 | `raw_import_row_id` | `BIGINT FK → journal_rawimportrow` | yes | `ON DELETE SET NULL`; `NULL` for manual |
@@ -122,7 +122,7 @@ One per trade, keyed by the execution that opened it.
 | `note` | `TEXT` | no, default `''` | optional reasoning |
 | `rules_followed` | `BOOLEAN` | yes, no default | `NULL` = not yet answered. "Journaled" ≡ `rules_followed IS NOT NULL` |
 | `stop_price` | `NUMERIC(20,10)` | yes | R-multiple input |
-| `planned_risk_amount` | `NUMERIC(19,4)` | yes | R-multiple input |
+| `planned_risk_amount` | `NUMERIC(19,4)` | yes | R-multiple input; `> 0` when set (`journalentry_planned_risk_positive`, migration 0004) |
 | `risk_currency` | `VARCHAR(3)` | yes | required (non-null **and** non-blank) iff `planned_risk_amount` is set |
 | `created_at`, `updated_at` | `TIMESTAMPTZ` | no | `auto_now_add` / `auto_now` |
 
@@ -130,10 +130,11 @@ Constraints/indexes:
 
 - `CHECK`: `risk_currency` is set (non-null and non-blank) if and only if
   `planned_risk_amount` is set (`journalentry_risk_currency_required_with_amount`).
-  **Tightened round-5 code review**: the original constraint only tested
-  `risk_currency__isnull`, so `planned_risk_amount="100.00", risk_currency=""` satisfied
-  it despite being meaningless — `""` is not null but isn't a currency either. Added
-  `~Q(risk_currency="")` to the "amount set" branch.
+  Non-blank `risk_currency` is enforced by `journalentry_risk_currency_iso_format`; the
+  redundant `~Q(risk_currency="")` term was dropped in migration 0004 (follow-ups row 11).
+- `CHECK`: `planned_risk_amount IS NULL OR planned_risk_amount > 0`
+  (`journalentry_planned_risk_positive`, migration 0004, ADR-0007 / follow-ups row 14).
+  The migration fails loudly if an existing row is `<= 0`; it rewrites no data.
 - `(user_id, rules_followed)` — `journalentry_user_flag_idx`. Covers all three of story 6's
   rule-followed filter states in one index: yes, no, and "not journaled"
   (`WHERE rules_followed IS NULL`, which a composite btree serves directly on the second
@@ -365,6 +366,7 @@ Verified in `journal/tests.py`:
   (round-7) asserts a `JournalEntry` saved with no `user` raises a plain `IntegrityError`
   naming `user_id`, not a misleading `CrossTenantForeignKeyError`.
 - `test_execution_price_zero_rejected` (round-7) asserts `IntegrityError` on `price=0`.
+- `test_journalentry_planned_risk_*` (J1): 0 and negative rejected, NULL and positive accepted.
 - `test_journalentry_risk_currency_blank_rejected_when_amount_set` and
   `test_execution_currency_blank_rejected` assert `IntegrityError` on
   `risk_currency=""` (with `planned_risk_amount` set) and `currency=""` respectively.
@@ -433,7 +435,8 @@ and `journal_journalentry` confirms the final constraint set landed correctly �
 `execution_broker_dedupe`'s widened `WHERE broker_execution_id IS NOT NULL AND NOT
 (broker_execution_id = '' AND broker_execution_id IS NOT NULL)`, no
 `execution_price_nonnegative`, `execution_currency_not_blank` present, and
-`journalentry_risk_currency_required_with_amount`'s blank-string exclusion present.
+`journalentry_risk_currency_required_with_amount`'s blank-string exclusion present
+(both later dropped as redundant in migration 0004).
 `accounts` was not touched either time — still a single migration, no churn to squash.
 
 That was intended to be the last squash before merge, but round-7 added one more

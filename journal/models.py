@@ -440,14 +440,7 @@ class Execution(UserOwned):
                 condition=models.Q(contract_multiplier__gt=0),
                 name="execution_contract_multiplier_positive",
             ),
-            # currency had no non-empty guard at all — no CheckConstraint, no
-            # full_clean() call site — unlike quantity/price/contract_multiplier above
-            # (round-5 code review). CLAUDE.md: "store currency with every amount"; a
-            # blank currency on a money-bearing execution violates that silently.
-            models.CheckConstraint(
-                condition=~models.Q(currency=""), name="execution_currency_not_blank"
-            ),
-            # Strict ISO 4217 shape ("usd"/"us" rejected); pairs with the field validator.
+            # Strict ISO 4217 shape ("usd"/"us"/"" rejected); pairs with the field validator.
             models.CheckConstraint(
                 condition=models.Q(currency__regex=CURRENCY_CODE_REGEX),
                 name="execution_currency_iso_format",
@@ -529,19 +522,10 @@ class JournalEntry(UserOwned):
 
     class Meta(UserOwned.Meta):
         constraints = [
-            # "required iff set" needs both a null check AND a non-blank check on
-            # risk_currency (round-5 code review): __isnull=False alone let
-            # risk_currency="" through, so planned_risk_amount="100.00",
-            # risk_currency="" satisfied the constraint despite being meaningless.
+            # "required iff set": both columns null, or both set.
             models.CheckConstraint(
-                condition=(
-                    models.Q(planned_risk_amount__isnull=True, risk_currency__isnull=True)
-                    | (
-                        models.Q(planned_risk_amount__isnull=False)
-                        & models.Q(risk_currency__isnull=False)
-                        & ~models.Q(risk_currency="")
-                    )
-                ),
+                condition=models.Q(planned_risk_amount__isnull=True, risk_currency__isnull=True)
+                | models.Q(planned_risk_amount__isnull=False, risk_currency__isnull=False),
                 name="journalentry_risk_currency_required_with_amount",
             ),
             models.CheckConstraint(
@@ -550,6 +534,13 @@ class JournalEntry(UserOwned):
                     | models.Q(risk_currency__regex=CURRENCY_CODE_REGEX)
                 ),
                 name="journalentry_risk_currency_iso_format",
+            ),
+            # ADR-0007 / follow-ups row 14. NULL = no planned risk entered.
+            models.CheckConstraint(
+                condition=models.Q(planned_risk_amount__isnull=True)
+                | models.Q(planned_risk_amount__gt=0),
+                name="journalentry_planned_risk_positive",
+                violation_error_message="Planned risk must be greater than zero.",
             ),
         ]
         indexes = [
