@@ -298,3 +298,104 @@ def test_row_menu_closes_on_escape_and_outside_click(dialog):
 )
 def test_row_menu_focusout_closes_unless_focus_or_pointer_stays_in_it(dialog, case, still_open):
     assert dialog["focusout"][case] is still_open
+
+
+# --- PR J3: charCounter (docs/design/journaling.md 3.4) --------------------------------------
+
+COUNTER_HARNESS = r"""
+const vm = require("vm");
+const src = require("fs").readFileSync(process.argv[1], "utf8");
+const listeners = {};
+const on = (type, fn) => (listeners[type] = listeners[type] || []).push(fn);
+const document = { addEventListener: on, querySelector: () => null, querySelectorAll: () => [] };
+const window = { addEventListener: on, Alpine: { data: (n, f) => (registered[n] = f) } };
+const registered = {};
+vm.runInNewContext(src, { document, window });
+(listeners["alpine:init"] || []).forEach((f) => f());
+
+function counter(value, invalid) {
+  const attrs = invalid ? { "aria-invalid": "true" } : {};
+  const textarea = {
+    value,
+    getAttribute: (k) => (k in attrs ? attrs[k] : null),
+    setAttribute: (k, v) => (attrs[k] = v),
+    removeAttribute: (k) => delete attrs[k],
+  };
+  const c = registered.charCounter();
+  c.$root = {
+    dataset: {
+      limit: "10000", from: "9000", counter: "{n} / {limit}",
+      near: "You're close to the {limit}-character limit.",
+      over: "Over the {limit}-character limit by {n}.",
+      tooLong: "That note is %(show_value)d characters and the limit is %(limit_value)d.",
+    },
+    querySelector: (s) => (s === "textarea" ? textarea : null),
+  };
+  c.$nextTick = (f) => f();
+  c.init();
+  const type = (v) => { textarea.value = v; c.update(); return c; };
+  return { c, textarea, attrs, type };
+}
+const out = {};
+let t = counter("a".repeat(8999));
+out.below = [t.c.counter, t.c.live];
+t.type("a".repeat(9412));
+out.near = [t.c.counter, t.c.live];
+t.c.live = "sentinel"; t.type("a".repeat(9413));
+out.no_repeat = t.c.live;  // not on every keystroke
+t.type("a".repeat(10003));
+out.over = [t.c.counter, t.c.live, t.attrs["aria-invalid"]];
+t.c.live = ""; t.c.leave();
+out.blur_over = t.c.live;
+t.c.live = "kept"; t.c.leave({ target: {} });  // focus left the error message, not the field
+out.blur_elsewhere = t.c.live;
+t.c.live = ""; t.c.leave({ target: t.textarea });
+out.blur_field = t.c.live;
+t.type("a".repeat(10000));
+out.back_under = [t.c.counter, "aria-invalid" in t.attrs];
+t.c.live = "x"; t.type("a".repeat(100)); t.c.leave();
+out.blur_under = t.c.live;
+// Code points: an emoji is one character, as on the server.
+t = counter("\u{1F600}".repeat(9000));
+out.emoji = t.c.counter;
+// A server-set aria-invalid stays until the next page load.
+t = counter("short", true);
+t.type("shorter");
+out.server_invalid = t.attrs["aria-invalid"];
+console.log(JSON.stringify(out));
+"""
+
+
+@pytest.fixture(scope="module")
+def char_counter():
+    if NODE is None:
+        pytest.skip("node is not installed")
+    run = subprocess.run(
+        [NODE, "-e", COUNTER_HARNESS, str(APP_JS)], capture_output=True, text=True, timeout=30
+    )
+    assert run.returncode == 0, run.stderr
+    return json.loads(run.stdout)
+
+
+def test_counter_is_hidden_below_9000_and_formats_from_there(char_counter):
+    assert char_counter["below"] == ["", ""]
+    assert char_counter["near"] == ["9,412 / 10,000", "You're close to the 10,000-character limit."]
+    assert char_counter["emoji"] == "9,000 / 10,000"
+
+
+def test_counter_announces_two_moments_and_blur_only(char_counter):
+    assert char_counter["no_repeat"] == "sentinel"
+    assert char_counter["over"] == [
+        "That note is 10003 characters and the limit is 10000.",
+        "Over the 10,000-character limit by 3.",
+        "true",
+    ]
+    assert char_counter["blur_over"] == "Over the 10,000-character limit by 3."
+    assert char_counter["blur_under"] == ""
+    assert char_counter["blur_elsewhere"] == "kept"
+    assert char_counter["blur_field"] == "Over the 10,000-character limit by 3."
+
+
+def test_counter_aria_invalid_is_a_hint_that_never_drops_the_servers(char_counter):
+    assert char_counter["back_under"] == ["10,000 / 10,000", False]
+    assert char_counter["server_invalid"] == "true"

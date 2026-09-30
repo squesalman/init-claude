@@ -1,7 +1,7 @@
-{# FormField: label, Django-rendered input (it adds aria-invalid and aria-describedby), error, help. #}
+{# FormField: label, Django-rendered input (it adds aria-invalid and aria-describedby), error, help. Optional: suffix (a fixed, aria-hidden unit inside the input box; the help text says it too, docs/design/journaling.md 3.5), focus_error (the error takes focus on load). #}
 <div class="field">
   <label for="{{ field.id_for_label }}" class="font-medium">{{ field.label }}</label>
-  {{ field }}
+  {% if suffix %}<div class="input-suffix-box">{{ field }}<span class="input-suffix" aria-hidden="true">{{ suffix }}</span></div>{% else %}{{ field }}{% endif %}
   {% include "partials/field_errors.html" %}
   {% if field.help_text %}<p id="{{ field.auto_id }}_helptext" class="mt-1 text-text-muted">{{ field.help_text }}</p>{% endif %}
 </div>

@@ -1,0 +1,13 @@
+{# RulesQuestion (docs/design/journaling.md 3.3): fieldset + legend, help tied by aria-describedby, two native radios as whole-label tiles, no default. Both tiles use the same neutral tokens; the selected one gets a thicker border and a check icon (CSS), never a color meaning. #}
+{% with field=form.rules_followed %}
+<fieldset class="mt-6" aria-describedby="{{ field.auto_id }}_helptext{% if field.errors %} {{ field.auto_id }}_error{% endif %}">
+  <legend class="font-medium">{{ field.label }}</legend>
+  <p id="{{ field.auto_id }}_helptext" class="mt-1 text-text-muted">{{ field.help_text }}</p>
+  {# id: the error summary links to #{{ field.auto_id }} #}
+  <div id="{{ field.auto_id }}" class="mt-2 flex flex-col gap-3 sm:flex-row sm:gap-4">
+    {% for radio in field %}<label for="{{ radio.id_for_label }}" class="radio-tile">{{ radio.tag }}<span>{{ radio.choice_label }}</span><span class="radio-check">{% include "partials/icon.html" with name="success" %}</span></label>
+    {% endfor %}
+  </div>
+  {% include "partials/field_errors.html" %}
+</fieldset>
+{% endwith %}

@@ -1,19 +1,17 @@
 {% extends "base.html" %}
-{# Journal page (docs/design/journaling.md 3; ADR-0007 section 9 context). PR J2: working, unstyled markup; J3 makes it design-complete. Page order is fixed: back link, trade summary, intro, My rules panel (its own form, first in DOM, never nested), then the journal form (full POST + PRG, no htmx). #}
+{# Journal page (docs/design/journaling.md 3; ADR-0007 section 9 context). Page order is fixed: back link, trade summary, intro, My rules panel (its own form, first in DOM, never nested), then the journal form (full POST + PRG, no htmx). Back links come in CSS-switched pairs (3.1, 3.7): the table row's #trade-<id> from sm up, the card's #trade-card-<id> below; the display:none twin is out of the accessibility tree. #}
 {% block title %}{{ title }}{% endblock %}
 {% block width %}max-w-form{% endblock %}
 {% block flash_attrs %} tabindex="-1" autofocus{% endblock %}
 {% block content %}
-<p><a href="{{ back_url }}">{{ copy.JOURNAL_BACK }}</a></p>
+{% url 'trades' as trades_url %}
+<p><a href="{{ back_url }}" class="hidden min-h-[44px] items-center gap-1 sm:inline-flex">{% include "partials/icon.html" with name="arrow-left" %}{{ copy.JOURNAL_BACK }}</a><a href="{{ trades_url }}#trade-card-{{ trade.id }}" class="inline-flex min-h-[44px] items-center gap-1 sm:hidden">{% include "partials/icon.html" with name="arrow-left" %}{{ copy.JOURNAL_BACK }}</a></p>
 
-<h1>{{ trade.symbol }} {% if trade.direction == "long" %}Long{% else %}Short{% endif %}</h1>
-<p>{% include "journal/partials/result_badge.html" with result=trade.result %} {{ trade.net_pnl|default:"Open" }}</p>
-<p>Opened {{ trade.opened }} ({{ trade.zone }})</p>
-<p>Qty {{ trade.quantity }}{% if trade.entries %} · {{ trade.entries }}{% endif %} · {{ trade.entry }} to {{ trade.exit|default:"-" }} · {{ trade.duration|default:"Open" }}{% if trade.account %} · <span class="break-words">{{ trade.account }}</span>{% endif %}</p>
+{% include "journal/partials/trade_summary.html" %}
 
-<p>{{ copy.JOURNAL_INTRO }}</p>
+<p class="mt-4 text-text-muted">{{ copy.JOURNAL_INTRO }}</p>
 
-{% if notice %}<div tabindex="-1" autofocus>{% include "partials/notice.html" with variant=notice.variant body=notice.text %}</div>{% endif %}
+{% if notice %}<div class="mt-4" tabindex="-1" autofocus>{% include "partials/notice.html" with variant=notice.variant body=notice.text %}</div>{% endif %}
 
 {% include "journal/partials/rules_panel.html" %}
 
@@ -21,28 +19,28 @@
   {% csrf_token %}
   {% include "partials/error_summary.html" %}
 
-  <fieldset aria-describedby="{{ form.rules_followed.auto_id }}_helptext">
-    <legend>{{ form.rules_followed.label }}</legend>
-    <p id="{{ form.rules_followed.auto_id }}_helptext">{{ form.rules_followed.help_text }}</p>
-    {{ form.rules_followed }}
-    {% include "partials/field_errors.html" with field=form.rules_followed %}
-  </fieldset>
+  {% include "journal/partials/rules_question.html" %}
 
-  {% include "partials/field.html" with field=form.note %}
+  <div class="note-field mt-6" x-data="charCounter" x-on:input="update" x-on:focusout="leave" data-limit="10000" data-from="9000" data-counter="{{ copy.COUNTER }}" data-near="{{ copy.COUNTER_LIVE_NEAR }}" data-over="{{ copy.COUNTER_LIVE_OVER }}" data-too-long="{{ copy.NOTE_TOO_LONG }}">
+    {% include "partials/field.html" with field=form.note %}
+    <p class="mt-1 text-right tabular-nums text-text-muted empty:hidden" x-text="counter"></p>
+    <p role="status" class="sr-only" x-text="live"></p>
+  </div>
 
-  <details id="risk-details"{% if risk_open %} open{% endif %}>
+  <details id="risk-details" class="disclosure mt-6"{% if risk_open %} open{% endif %}>
     <summary>{{ copy.RISK_SUMMARY }}</summary>
-    <p>{{ copy.RISK_INTRO }}</p>
-    {% include "partials/field.html" with field=form.stop_price %}
-    {% include "partials/field.html" with field=form.planned_risk_amount %}
-    <p id="risk-currency">{{ risk_currency }}</p>
-    {% if both_set %}<p>{{ copy.RISK_BOTH_SET }}</p>{% endif %}
+    <div class="space-y-4 pb-2">
+      <p class="text-text-muted">{{ copy.RISK_INTRO }}</p>
+      {% include "partials/field.html" with field=form.stop_price %}
+      {% include "partials/field.html" with field=form.planned_risk_amount suffix=risk_currency %}
+      {% if both_set %}<p class="text-text-muted">{{ copy.RISK_BOTH_SET }}</p>{% endif %}
+    </div>
   </details>
-  {% if r_status %}<p>{{ r_status }}</p>{% endif %}
+  {% if r_status %}<p id="r-status" class="mt-2 flex items-start gap-2 text-text-muted"><span class="text-info">{% include "partials/icon.html" with name="info" %}</span><span>{{ r_status }}</span></p>{% endif %}
 
-  <p>
-    <button type="submit" class="btn-primary" data-busy="{{ copy.JOURNAL_SAVE_BUSY }}">{{ copy.JOURNAL_SAVE }}</button>
-    <a href="{{ back_url }}">{{ copy.JOURNAL_BACK_TO_TRADES }}</a>
-  </p>
+  <div class="action-bar">
+    <button type="submit" class="btn-primary w-full sm:w-auto" data-busy="{{ copy.JOURNAL_SAVE_BUSY }}">{{ copy.JOURNAL_SAVE }}</button>
+    <a href="{{ back_url }}" class="hidden min-h-[44px] items-center sm:inline-flex">{{ copy.JOURNAL_BACK_TO_TRADES }}</a><a href="{{ trades_url }}#trade-card-{{ trade.id }}" class="flex min-h-[44px] items-center justify-center sm:hidden">{{ copy.JOURNAL_BACK_TO_TRADES }}</a>
+  </div>
 </form>
 {% endblock %}

@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {# One 404 for a missing id, another user's id and a closing fill (design 4.6; spec AC 11, 12). Never says whose trade it is or that it exists. #}
 {% block title %}{{ copy.NOT_FOUND_TITLE }}{% endblock %}
+{% block width %}max-w-form{% endblock %}
 {% block content %}
-<h1>{{ copy.NOT_FOUND_TITLE }}</h1>
-<p>{{ copy.NOT_FOUND_BODY }}</p>
-<p><a href="{% url 'trades' %}">{{ copy.NOT_FOUND_LINK }}</a></p>
+<h1 class="text-title font-semibold">{{ copy.NOT_FOUND_TITLE }}</h1>
+<p class="mt-2 text-text-muted">{{ copy.NOT_FOUND_BODY }}</p>
+<p class="mt-6"><a href="{% url 'trades' %}">{{ copy.NOT_FOUND_LINK }}</a></p>
 {% endblock %}

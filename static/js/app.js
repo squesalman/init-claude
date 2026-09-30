@@ -50,6 +50,53 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
+  // CharCounter (docs/design/journaling.md 3.4): note and rules textareas. The x-data sits on
+  // a wrapper (Django renders the textarea), so input/focusout bubble up to it. Hidden until
+  // data-from characters ("9,412 / 10,000"); over the limit it shows the server's too-long
+  // message. The live region speaks only on reaching data-from, on going over, and on blur
+  // while over. Code points, like the server; a server-set aria-invalid is kept.
+  const fmt = (n) => n.toLocaleString("en-US");
+  window.Alpine.data("charCounter", () => ({
+    count: 0,
+    live: "",
+    init() {
+      const data = this.$root.dataset;
+      this.limit = Number(data.limit);
+      this.from = Number(data.from);
+      this.field = this.$root.querySelector("textarea");
+      this.serverInvalid = this.field.getAttribute("aria-invalid") === "true";
+      this.count = [...this.field.value].length;
+    },
+    get counter() {
+      const data = this.$root.dataset;
+      if (this.count < this.from) return "";
+      if (this.count > this.limit) {
+        return data.tooLong.replace("%(show_value)d", this.count).replace("%(limit_value)d", this.limit);
+      }
+      return data.counter.replace("{n}", fmt(this.count)).replace("{limit}", fmt(this.limit));
+    },
+    get overText() {
+      return this.$root.dataset.over
+        .replace("{limit}", fmt(this.limit)).replace("{n}", fmt(this.count - this.limit));
+    },
+    update() {
+      const before = this.count;
+      this.count = [...this.field.value].length;
+      if (this.count < this.from) this.live = "";
+      else if (this.count > this.limit && before <= this.limit) this.live = this.overText;
+      else if (this.count <= this.limit && before > this.limit) this.live = "";
+      else if (before < this.from) this.live = this.$root.dataset.near.replace("{limit}", fmt(this.limit));
+      if (this.count > this.limit || this.serverInvalid) this.field.setAttribute("aria-invalid", "true");
+      else this.field.removeAttribute("aria-invalid");
+    },
+    leave(e) {
+      // focusout bubbles from anything in the wrapper (the focused error message too).
+      if ((e && e.target !== this.field) || this.count <= this.limit) return;
+      this.live = ""; // the same text again would not be re-announced
+      this.$nextTick(() => { this.live = this.overText; });
+    },
+  }));
+
   // ConfirmDialog tick gate (design 3.3, 4, 7): with journal entries the Delete button stays
   // disabled until the box is ticked, and a polite region says when that changes. Without
   // JS the button is enabled and the server refuses an unticked submit.

@@ -19,7 +19,7 @@
   </thead>
   <tbody>
     {% for t in trades %}
-    <tr id="trade-{{ t.id }}">
+    <tr id="trade-{{ t.id }}" class="scroll-mt-16">
       <td class="whitespace-nowrap tabular-nums">{{ t.opened }}</td>
       <td class="break-all font-medium">{{ t.symbol }}</td>
       <td class="whitespace-nowrap"><span class="inline-flex items-center gap-1">{% if t.direction == "long" %}{% include "partials/icon.html" with name="arrow-up" %}Long{% else %}{% include "partials/icon.html" with name="arrow-down" %}Short{% endif %}</span></td>
