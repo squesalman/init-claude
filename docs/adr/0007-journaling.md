@@ -345,6 +345,8 @@ sorting on journal state, a settings page, a `django-ninja` endpoint, and a proj
 4. **CHECK approved:** `journalentry_planned_risk_positive` ships in PR J1 (`database-engineer`).
 5. **ADR-0005 amendment approved:** `max(updated_at)` is signed into the delete token, and any change reads as stale (§7, PR J2).
 
-Also found, not blocking: ADR-0003 §6 still says `opening_execution ... ON DELETE CASCADE`, while the code,
-`docs/data/schema.md` and ADR-0005 all say RESTRICT. It's reported in `docs/README.md` under Known conflicts
-and hasn't been changed here.
+Resolved (2026-09-30): ADR-0003 §6 now says RESTRICT, matching the code, `docs/data/schema.md` and ADR-0005. No open conflict.
+
+## Amendment (J2 as built, 2026-09-30; user accepted after advisor review)
+- **Save service (§6 step 2):** `JournalEntry.objects.for_user(user).update_or_create(user=user, opening_execution=opening, defaults=...)` replaces `get_or_create` plus `save()`. It is built on `get_or_create` (same UNIQUE-race re-read, AC 8) and adds a row lock. A missing yes/no is left out of `defaults`, so it never clears a saved answer. `updated_at` must stay in `update_fields`: the ADR-0005 stale guard depends on it (test_4h).
+- **Stale check (§7):** folded into the delete, not a separate query before it. The delete filters `pk <= max_pk` and `updated_at <= signed`, then the existing "anything left?" `exists()` raises `StaleConfirm` inside the same `atomic()`, which rolls back everything. Nothing is deleted on a stale confirm (test_4h, two-entry case included).
