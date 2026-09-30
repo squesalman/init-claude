@@ -198,7 +198,7 @@ that no matcher can invent or reassign without the underlying fill changing.
 |---|---|---|
 | `id` | `BIGSERIAL PK` | |
 | `user_id` | `BIGINT NOT NULL REFERENCES accounts_user` | |
-| `opening_execution_id` | `BIGINT NOT NULL UNIQUE REFERENCES journal_execution ON DELETE CASCADE` | = the trade id. `OneToOneField` |
+| `opening_execution_id` | `BIGINT NOT NULL UNIQUE REFERENCES journal_execution ON DELETE RESTRICT` | = the trade id. `OneToOneField`. RESTRICT, not CASCADE (ADR-0005; corrected 2026-09-30 to match the code) |
 | `note` | `TEXT NOT NULL DEFAULT ''` | optional reasoning (story 4) |
 | `rules_followed` | `BOOLEAN NULL` | `NULL` = **not yet answered**. See below |
 | `stop_price` | `NUMERIC(20,10) NULL` | R-multiple input, optional. Confirmed; R rule lives in `docs/domain/pnl-and-matching.md` §3 |

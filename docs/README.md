@@ -12,8 +12,9 @@ Statuses: **Accepted** (build from it) · **Draft** (don't build from it yet) ·
 | [0002-stack-revised](adr/0002-stack-revised.md) | Accepted | Django, Postgres, htmx/Alpine/Tailwind, no worker, no SPA, tenant isolation approach. |
 | [0003-data-model](adr/0003-data-model.md) | Accepted, amended by 0004 | Executions → derived trades → journal entries. Columns, constraints, indexes. |
 | [0004-topstep-dedupe-and-pairing](adr/0004-topstep-dedupe-and-pairing.md) | Accepted | Dedupe key includes account label; per-row trade pairing via `broker_trade_id`; `skipped_conflict`. |
-| [0005-batch-delete](adr/0005-batch-delete.md) | Accepted | "Delete this import" semantics, including journaled entries behind a counted tick box. |
-| [0006-importer-write-path-and-tenant-rules](adr/0006-importer-write-path-and-tenant-rules.md) | Accepted | Importer writes per-row in one transaction; `UserScopedModelForm`; banned query patterns. |
+| [0005-batch-delete](adr/0005-batch-delete.md) | Accepted, amended by 0007 | "Delete this import" semantics, including journaled entries behind a counted tick box. Stale guard also signs `max(updated_at)`. |
+| [0006-importer-write-path-and-tenant-rules](adr/0006-importer-write-path-and-tenant-rules.md) | Accepted, amended by 0007 | Importer writes per-row in one transaction; `UserScopedModelForm`; banned query patterns. Cross-tenant form error uses the form's own save-failure copy. |
+| [0007-journaling](adr/0007-journaling.md) | Accepted (user rulings 2026-09-30) | Journal entry form/service/views, R + Avg R + "Left out" on read, `planned_risk_amount > 0` CHECK, ADR-0005 stale-guard amendment, template contract, PR split J1-J3. |
 
 ## Product (`docs/product/`, owner: `product-manager`)
 | Doc | Status | Answers |
@@ -57,4 +58,5 @@ None.
 
 ## Recent rulings
 - 2026-09-26: slice 1 = no filters, no pagination; stat card strings per PM spec; visible time zone field and confirm-password at signup; signup email leak accepted; login throttling deferred; `design/auth-and-trades-list.md` is the single source for table layout and copy, `product/features/import-and-list.md` for behavior; ADR-0006 approved.
+- 2026-09-30: ADR-0007 accepted. Parser accepts a leading minus (risk <= 0 is `risk_not_positive`); cross-tenant form error uses `JOURNAL_SAVE_FAILED` (ADR-0006 amended); build journaling now, follow-ups row 16 stays user-owned and non-blocking; `planned_risk_amount > 0` CHECK approved (PR J1); delete token signs `max(updated_at)` (ADR-0005 amended, PR J2).
 - 2026-09-26: R-multiple precedence kept as written in `pnl-and-matching.md` §3 (`planned_risk_amount` wins over `stop_price`; no fallback when planned risk is unusable). User ruling: "KEEP".

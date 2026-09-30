@@ -1,6 +1,6 @@
 # ADR-0006: Importer write path, and tenant rules for forms and views
 
-- **Status:** Accepted (user approved 2026-09-26); Decision 2 amended 2026-09-27 (cross-tenant FK error in forms is caught and shown as a form error, not a 500)
+- **Status:** Accepted (user approved 2026-09-26); Decision 2 amended 2026-09-27 (cross-tenant FK error in forms is caught and shown as a form error, not a 500); amended 2026-09-30 by [ADR-0007](0007-journaling.md) (the message is the form's own save-failure copy)
 - **Date:** 2026-09-26
 - **Deciders:** architect (proposed), user (approved 2026-09-26)
 - **Depends on:** [ADR-0002](0002-stack-revised.md) (tenant isolation, RLS trigger), [ADR-0003](0003-data-model.md)
@@ -138,7 +138,10 @@ Because every FK choice is scoped, validation rejects another tenant's id as an 
 `CrossTenantForeignKeyError` can then fire only because of a bug or a tampered request that reaches
 `save()` past form validation. **Amended 2026-09-27 (user ruling, option B):** a view that saves a
 form catches `CrossTenantForeignKeyError` and re-renders the form with a generic form-level error
-("Something went wrong and nothing was saved. Try again in a moment.") instead of returning a 500.
+instead of returning a 500. **Amended 2026-09-30 (user ruling, ADR-0007):** the message is that form's
+own save-failure copy from its design doc (for the journal form, `JOURNAL_SAVE_FAILED`; for the rules form,
+`RULES_SAVE_FAILED`), the same one a `DatabaseError` shows. The earlier example string ("Something went
+wrong and nothing was saved. Try again in a moment.") is superseded.
 The message names no field and no other user's data, and the event is logged (id of the acting user
 and model name only, no values) so the bug stays visible. This matches the `CrossTenantForeignKeyError`
 docstring in `journal/models.py` and `docs/data/schema.md` ("Form/view handling"). The original

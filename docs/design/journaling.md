@@ -190,7 +190,7 @@ A native `<details>` "Risk for Avg R (optional)". **Open** when either value is 
 ```
 
 - Both inputs: `type="text"`, `inputmode="decimal"`, `autocomplete="off"`, `autocapitalize="none"`, `spellcheck="false"`. No `type="number"` (spinner and scroll-wheel edits, locale surprises).
-- Number parsing (backend): plain digits with an optional period. Commas are accepted only as thousands separators (`1,250.50`) and stripped; anything else gets the "enter a number" message. Stop up to 10 decimal places, planned risk up to 4 (column scales). Whitespace trimmed.
+- Number parsing (backend): plain digits with an optional period and an optional leading minus (user ruling 2026-09-30, ADR-0007: a negative planned risk gets "Planned risk needs to be more than 0."; a negative stop is a valid price). Commas are accepted only as thousands separators (`1,250.50`) and stripped; anything else gets the "enter a number" message. Stop up to 10 decimal places, planned risk up to 4 (column scales). Whitespace trimmed.
 - Suffix: `<span id="risk-currency">USD</span>` inside the same bordered box as the input (input has no right border, box has the focus ring). Visible text, contrast AA, not selectable-by-mistake. Input `aria-describedby="risk-help risk-currency"` (plus error id when present). No currency input exists; the value posted is ignored/never read (spec decision 4).
 - The stop help text is dynamic by side (single-entry only): "...it sits below your entry of {entry}." (long) or "...above your entry of {entry}." (short). Multi-leg: the multi-leg help replaces it (4.4).
 - "Planned risk is used for R when both are set." shows when both fields have a value in the current render (saved or submitted), under the planned risk help.

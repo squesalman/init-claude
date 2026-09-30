@@ -1,6 +1,6 @@
 # ADR-0005: "Delete this import" (batch delete) semantics
 
-- **Status:** Accepted (user ruling 2026-09-26: option B in the table below, delete journaled entries behind a counted tick box)
+- **Status:** Accepted (user ruling 2026-09-26: option B in the table below, delete journaled entries behind a counted tick box); §2 stale guard amended 2026-09-30 by [ADR-0007](0007-journaling.md) §7 (user approved)
 - **Date:** 2026-09-26
 - **Deciders:** architect (proposed), user (approved 2026-09-26: "a, yes, yes, yes")
 - **Depends on:** [ADR-0003](0003-data-model.md) (on_delete rules, `for_user()`), [ADR-0004](0004-topstep-dedupe-and-pairing.md)
@@ -68,6 +68,11 @@ B, concretely:
   roll back and re-render the confirm with fresh counts. This needs no locks. An entry committed after
   that check is blocked by the RESTRICT FK on `opening_execution` when executions are deleted, so it
   errors out and is never lost silently.
+  **Amended 2026-09-30 ([ADR-0007](0007-journaling.md) §7):** the journal form can edit an entry after the
+  confirm renders, which max pk can't see. The signed token also carries the newest `updated_at` shown
+  (`"<max_pk>:<max_updated_at ISO>"`; an old-format, forged or missing token reads as `(0, None)` and fails
+  safe). Inside the transaction, before any delete, an entry in the batch with `updated_at` later than that
+  value raises `StaleConfirm`.
   Known ceiling: an UPDATE that re-points an older entry into the batch (ADR-0003 manual correction,
   not built) is not caught by max pk. When that ships, sign a hash of the sorted shown pk set instead.
 
