@@ -32,7 +32,7 @@ Other decisions made here (all inside the spec's locked set):
 /trades/  -- row link "Add journal" / state label --> /trades/<id>/journal/  (GET: blank or prefilled)
     ^                                                    |
     |  "Trades" back link / "Back to trades"             +-- Save journal (POST)
-    |  (returns to /trades/#trade-<id>)                  |     ok -> 302 same URL + flash "Journal saved."
+    |  (>=sm: #trade-<id>, <sm: #trade-card-<id>)        |     ok -> 302 same URL + flash "Journal saved."
     +----------------------------------------------------+     errors -> 200, summary + field messages, values kept
                                                          |     all blank, no entry yet -> 200, info notice, nothing created
                                                          |     failure -> 200, values kept, "couldn't save" notice
@@ -99,7 +99,10 @@ Order rationale: the rules panel must sit directly above the question (spec). Th
 
 Header details:
 
-- Back link "Trades" (left arrow icon, decorative) goes to `/trades/#trade-{opening_execution_id}`. Rows and cards on the list carry `id="trade-{id}"` with `scroll-margin-top` clearing the sticky header. Sort order is not preserved (accepted).
+- Back link "Trades" (left arrow icon, decorative) returns to the trade's own place in the list. **Two links, one per breakpoint, CSS-switched (amended 2026-09-30, follow-ups row 40):** the table row has `id="trade-{id}"` and the mobile card has `id="trade-card-{id}"` (ids must be unique, and a `#fragment` never scrolls to a `display:none` element, so one shared id cannot work). The page renders the back link twice, pure CSS, no JS:
+  - `<a class="hidden sm:inline" href="{{ back_url }}">` (`back_url` = `/trades/#trade-{id}`, unchanged ADR-0007 key), for the table.
+  - `<a class="sm:hidden" href="{% url 'trades' %}#trade-card-{{ trade.id }}">` for the cards.
+  Same text and icon on both; the `display:none` twin is not in the accessibility tree, so a screen reader hears one link. The same pair is used for the bottom "Back to trades" (3.7). Both list ids carry `scroll-margin-top` clearing the sticky header. Sort order is not preserved (accepted). No new context key: the template builds the card URL from `{% url 'trades' %}` and `trade.id`.
 - h1: symbol, then side as icon plus word (same arrow icons as the list).
 - Result badge and signed net P&L reuse `result_badge.html` and the list's P&L formatter and `text-gain` / `text-loss` (sign always printed). Open trade: "Open" badge, P&L shows the word "Open".
 - Line 2: opened time in the user's zone (zone named once here). Line 3: quantity, entry to exit ("-" plus hidden "not closed yet" if open), duration ("Open" if open), account label only when non-blank (escape it). Multi-entry trades add "{n} entries" after quantity.
@@ -110,6 +113,13 @@ Intro line: muted text, one sentence. Not a Notice.
 ### 3.2 My rules panel
 
 Structure: a bordered card containing a native `<details>` (summary "My rules") plus a preview `<p>` placed **after** the `<details>` and hidden by CSS when it is open (`details[open] + .rules-preview`). No JS is needed to open or close it.
+
+Exact build (amended 2026-09-30, follow-ups row 41; matches the J2 markup, which already has the `<p>` after the `<details>` inside `#rules-panel`):
+
+- Preview: `<p class="rules-preview">` with the escaped text (autoescape, no `|safe`, no `|linebreaks`). CSS in the Tailwind source: `.rules-preview { @apply mt-2 whitespace-pre-line break-words line-clamp-3; }` and `details[open] + .rules-preview { display: none; }`. `whitespace-pre-line` keeps the user's line breaks and collapses runs of spaces; `line-clamp-3` cuts at three rendered lines (a wrapped long line counts as several), with an ellipsis. Rules are trimmed on save, so no leading blank lines; blank lines inside the text count as lines (accepted). Saved rules: normal text color. Empty prompt (`RULES_PROMPT`): `text-text-muted`. If the installed Tailwind lacks `line-clamp-*`, write the three declarations by hand (`display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden`). Rebuild the bundle (follow-ups row 41) and check that `whitespace-pre-line`, `pt-2`, `border-t` and `line-clamp-3` are in `static/css/app.css`.
+- Summary: `<summary class="...min-h-[44px] flex justify-between">` with the heading on the left and, on the right, two spans: `<span class="rules-action-idle">Edit|Add</span><span class="rules-action-close">Close</span>` plus a chevron icon. CSS: `.rules-action-close { display:none }`, `details[open] .rules-action-idle { display:none }`, `details[open] .rules-action-close { display:inline }`. The chevron rotates with `details[open]` (no animation). J2 currently prints "My rules Edit" as one text run; split it as above.
+- The preview is outside the `<details>`, so it is never in the focus order and never hidden from screen readers while closed; when open it is `display:none`, so text is not read twice.
+- When `rules_open` (after a save, error or failure) the server renders `<details open>`: preview hidden, status line or field error visible inside.
 
 Closed states:
 
@@ -168,7 +178,9 @@ A `<fieldset>` with a `<legend>` (the question) and help text tied by `aria-desc
 
 ### 3.5 Risk for Avg R (progressive disclosure)
 
-A native `<details>` "Risk for Avg R (optional)". **Open** when either value is saved, when the submitted form has a risk error, or when the trade is multi-leg (so the hint is visible). Closed otherwise.
+A native `<details id="risk-details">` "Risk for Avg R (optional)". Open state is the view's `risk_open` (ADR-0007 section 9 as amended): a risk value saved **or typed** in this render, a risk error, or a multi-leg trade (so the hint is visible). Closed otherwise. The template only tests `risk_open`; it computes nothing. **The status line (3.6) sits outside and directly after the `<details>`**, so it stays visible when the section is collapsed (the diagram below draws it inside for reading order only).
+
+Stop and risk help are each field's `help_text` (set in `JournalEntryForm.__init__`: `STOP_HELP_LONG/SHORT/MULTI_LEG` and `RISK_HELP`). Render them through `field.html` (`{{ field.help_text }}`, id `{auto_id}_helptext`, already tied by Django's `aria-describedby`). Do not add `multi_leg` or `stop_help` context keys.
 
 ```
 | v Risk for Avg R (optional)                                  |
@@ -191,7 +203,7 @@ A native `<details>` "Risk for Avg R (optional)". **Open** when either value is 
 
 - Both inputs: `type="text"`, `inputmode="decimal"`, `autocomplete="off"`, `autocapitalize="none"`, `spellcheck="false"`. No `type="number"` (spinner and scroll-wheel edits, locale surprises).
 - Number parsing (backend): plain digits with an optional period and an optional leading minus (user ruling 2026-09-30, ADR-0007: a negative planned risk gets "Planned risk needs to be more than 0."; a negative stop is a valid price). Commas are accepted only as thousands separators (`1,250.50`) and stripped; anything else gets the "enter a number" message. Stop up to 10 decimal places, planned risk up to 4 (column scales). Whitespace trimmed.
-- Suffix: `<span id="risk-currency">USD</span>` inside the same bordered box as the input (input has no right border, box has the focus ring). Visible text, contrast AA, not selectable-by-mistake. Input `aria-describedby="risk-help risk-currency"` (plus error id when present). No currency input exists; the value posted is ignored/never read (spec decision 4).
+- Suffix (amended 2026-09-30): `<span class="input-suffix" aria-hidden="true">{{ risk_currency }}</span>` inside the same bordered box as the input (input has no right border, `focus-within` ring on the box). Visible text, contrast AA, `select-none`. It is `aria-hidden` and has no id because the `RISK_HELP` text already says "in {currency}" and Django already ties the input to that help (`aria-describedby`); a second id would need a widget-attr change in `forms.py` for no gain. Remove the J2 `<p id="risk-currency">` line. Implement by adding an optional `suffix` variable to `partials/field.html` (`{% if suffix %}<div class="input-suffix-box">{{ field }}<span ...>{{ suffix }}</span></div>{% else %}{{ field }}{% endif %}`), used as `with suffix=risk_currency` for the planned risk field only; no separate `suffix_input.html`. No currency input exists; the value posted is ignored/never read (spec decision 4).
 - The stop help text is dynamic by side (single-entry only): "...it sits below your entry of {entry}." (long) or "...above your entry of {entry}." (short). Multi-leg: the multi-leg help replaces it (4.4).
 - "Planned risk is used for R when both are set." shows when both fields have a value in the current render (saved or submitted), under the planned risk help.
 - Save applies `risk_currency` = trade currency when planned risk is set, cleared when blank (domain §3). Nothing on the page asks for it.
@@ -219,7 +231,7 @@ Icon is `info`, not `attention`; the line is muted text on the normal surface, n
 ```
 
 - "Save journal" is the one primary button, min 44px. On submit: "Saving..." disabled (label kept when JS is off), using the existing `data-busy` pattern in `app.js`.
-- "Back to trades" is a plain secondary-style link to `/trades/#trade-{id}`. No confirm.
+- "Back to trades" is a plain secondary-style link, rendered as the same CSS-switched pair as the top back link (3.1): `hidden sm:inline` to `back_url`, `sm:hidden` to `{% url 'trades' %}#trade-card-{{ trade.id }}`. In the mobile sticky bar only the `sm:hidden` one shows. No confirm.
 - Mobile: the actions bar is `sticky bottom-0` inside the form with `padding-bottom: env(safe-area-inset-bottom)`, surface background and a top border, Save full width, Back below it. Enter in the note textarea inserts a newline (does not submit).
 - Enter in the stop or planned risk input submits the form (native).
 
@@ -301,11 +313,11 @@ New last column (after Net P&L, after Account when that column shows): `<th scop
 
 Link text is the state label (5.3). The accessible name adds context: visible text plus a visually hidden suffix " for {symbol}, opened {opened}", so a screen reader's links list does not read 177 identical "Add journal". Example accessible name: "Add journal for MNQZ6, opened Sep 26, 2:31 PM".
 
-Links are underlined (not color alone), visible focus ring, no `target`. Each `<tr>` gets `id="trade-{opening_execution_id}"`.
+Links are underlined (not color alone), visible focus ring, no `target`. Each `<tr>` gets `id="trade-{opening_execution_id}"` (unchanged; this is `back_url`'s target at `sm` and up) and `scroll-margin-top` (class `scroll-mt-16` or the sticky header height).
 
 ### 5.2 Mobile cards
 
-Each card gets one last line: a full-width link button, min 44px tall, label = state label (with the same icon), separated from the card body by a top border. `<li id="trade-{id}">`. The rest of the card is not a link (one target per card, no nested interactive areas).
+Each card gets one last line: a full-width link button, min 44px tall, label = state label (with the same icon), separated from the card body by a top border. `<li id="trade-card-{id}">` (**not** `trade-{id}`: that id is on the hidden table row; ids stay unique, and the journal page's mobile back link targets this one, see 3.1), with the same `scroll-margin-top`. The rest of the card is not a link (one target per card, no nested interactive areas).
 
 ```
 | CLZ6  Short                 -$150.00 |
@@ -336,7 +348,7 @@ No "journaled X of Y" counter and no nudging on the list (gamified-guilt pattern
 ### 5.4 Keyboard and mobile
 
 - Table: Tab reaches the journal link after the header sort links, row by row; Enter follows the link. No row-click behaviour, no hidden hover-only affordance.
-- Returning with the back link lands at `/trades/#trade-{id}`; the browser Back button also works (pages are `no-store`, the list reloads).
+- Returning with the back link lands at `/trades/#trade-{id}` (table) or `/trades/#trade-card-{id}` (mobile cards), whichever is visible (3.1); the browser Back button also works (pages are `no-store`, the list reloads).
 - Mobile: link is the card's last line, 44px target, whole width.
 
 ---
@@ -365,6 +377,8 @@ New help text (n = 0): "Avg R shows your results in units of what you risked on 
 New Avg R item: "Avg R: net P&L after fees divided by the risk you entered, averaged over closed trades that have one. Risk is your planned risk amount if you set one, otherwise the distance from your entry to your stop times your size (trades with one entry only). Trades without usable risk are left out, never counted as zero."
 
 The other three items (win rate, total P&L, times) are unchanged.
+
+Ruling (2026-09-30): the phrase "(trades with one entry only)" in `CALC_AVG_R` stays verbatim. "only" there states scope (which trades a stop can size), not grading, and coach tone holds. The AC 22 evaluative-words test exempts exactly that substring (`journal/test_trades_views.py` replaces "one entry only" with "one entry" before scanning) and no other "only"; keep that exemption as is. Do not reword the string without changing the test in the same PR.
 
 ---
 
@@ -579,9 +593,34 @@ Unchanged and reused in the dialog: `DELETE_NO_NOTE` "(no written note)", `RULES
 
 ---
 
+## 12a. J3 deliverables (frontend-engineer builds these and nothing else)
+
+Templates (all exist unstyled from J2; J3 styles and completes them, no new context keys, no backend change):
+- [ ] `journal_form.html`: page order per section 3; h1 = symbol + side icon + word; `TradeSummary` block (extract to `partials/trade_summary.html`) with result badge, signed P&L (`text-gain`/`text-loss` plus sign and word), open-trade "Open"; account label escaped, `break-words`.
+- [ ] Back link and "Back to trades" as the CSS-switched pair (3.1, 3.7); table row `id="trade-{id}"`, card `id="trade-card-{id}"` in `trade_cards.html`; `scroll-margin-top` on both; update the two template/view tests that assert the card id.
+- [ ] `rules_panel.html`: card, summary split into idle/close spans, `.rules-preview`, CSS per 3.2, textarea 5 rows with max-height about 12 rows, `charCounter`, own form (never nested), htmx attrs as J2.
+- [ ] `partials/rules_question.html`: fieldset, legend, help via `aria-describedby`, two radio tiles (48px mobile, 44px desktop), same neutral tokens, check icon on selected, no default.
+- [ ] Note field: `charCounter` (show from 9,000), no `maxlength`, `sr-only` `role="status"` region with the two threshold texts.
+- [ ] Risk section: `details#risk-details` open by `risk_open` only; both fields `type="text"`, `inputmode="decimal"`, `autocomplete="off"`, `autocapitalize="none"`, `spellcheck="false"`; suffix via optional `suffix` in `field.html` (3.5); help from `field.help_text`; `both_set` line; status line `r_status` outside and after the `<details>`.
+- [ ] Actions: Save (`data-busy`), sticky bottom bar on mobile with `env(safe-area-inset-bottom)`, form `scroll-padding-bottom`.
+- [ ] `partials/journal_link.html`: icon from `t.journal_state` (`plus`, `document`, `pencil`), keep the J2 pattern (visible label `aria-hidden`, `sr-only` full name), underline, 44px on cards, muted style only for the "not yet" states. Add the three icons to `partials/icon.html`.
+- [ ] `trade_cards.html`: journal link line with top border (needs the rebuilt bundle, follow-ups row 41). `trade_table.html`: Journal column already present.
+- [ ] Avg R card: "Left out" line (`cards.avg_r.left_out`) and n = 0 help per section 6; "How these are calculated" already uses the new `CALC_AVG_R`.
+- [ ] Import delete dialog: `has_risk` muted line, `url` "View trade" link (`target="_blank" rel="noopener"` plus sr-only `DELETE_VIEW_SR`), remove the stale "entry.url is always None" comment.
+- [ ] `trade_not_found.html`: 404 copy per 4.6.
+- [ ] Tailwind bundle rebuilt (follow-ups row 41); `static/js/app.js`: `charCounter` (CSP build, `data-` props), htmx rules-save focus to the `role="status"` line, existing `data-busy` and `data-request-error`.
+
+States to verify by hand (light and dark, 320px, 200% zoom): new, populated, saved flash, nothing-to-save, validation error (risk error opens the section), save failure, open trade, multi-leg, rules closed-empty, closed-saved (multi-line clamps to 3), rules open, rules saved, rules too long, rules failure, 404, no-JS rules save (302 + flash), back link lands on the visible row/card at 320px and 1024px.
+
+Copy: every string comes from section 12 via `copy.*`; no literal English in templates except the column header "Journal" and the existing sort headers. No new strings are introduced by this section.
+
+Focus and aria: flash or Notice focused on load (`flash_attrs`, `autofocus` + `tabindex="-1"`); error summary focused with links to fields; field errors `aria-invalid` plus `aria-describedby`, no `role="alert"`; radios by fieldset/legend; `details` native; the suffix is `aria-hidden`; the status line has no live role on plain GET; the counter is not live per keystroke.
+
+---
+
 ## 13. Open questions
 
 1. `product-manager`: adopt the label wording changes in section 9 items 4 and 5 (spec edit).
 2. `backend-engineer`: confirm the view can re-render the form with submitted values on DB and cross-tenant errors (save-failure copy depends on it), and that the R reason code for the status line comes from the same function as the stats.
-3. `frontend-engineer`: confirm the Alpine CSP build supports the `charCounter` component and the `details[open] + .rules-preview` CSS without new dependencies (expected yes; both are plain).
+3. `frontend-engineer`: confirm the Alpine CSP build supports the `charCounter` component (expected yes). The `details[open] + .rules-preview` CSS is now specified in 3.2 and needs no dependency.
 4. Orchestrator or user: after saving, stay on the page (this doc) versus return to `/trades/#trade-<id>` with a flash. Chosen: stay, so a trader can keep adding detail. Flip it if review-ritual use shows people want to move down the list after each save.
