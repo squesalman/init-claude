@@ -137,18 +137,23 @@ DELETE_BODY_NO_TRADES = (
     "This import added no trades (every row was skipped or failed). Deleting it only removes "
     "the upload record. Your trades are not affected."
 )
+# Replaced by docs/design/journaling.md 7 and 12 (stop/risk mention, the trade page link).
 DELETE_JOURNAL_BODY_ONE = (
     "You've journaled 1 of these trades ({noted}). Deleting the import deletes that journal "
-    "entry too."
+    "entry too, along with any stop or planned risk on it."
 )
 DELETE_JOURNAL_BODY_MANY = (
     "You've journaled {n} of these trades ({noted}). Deleting the import deletes those "
-    "journal entries too."
+    "journal entries too, along with any stop or planned risk on them."
 )
 DELETE_LIST_HEADING = "Journal entries that will be deleted"
 DELETE_LIST_HELPER = (
-    "Want to keep any of your writing? Copy it from the list or open the trade first."
+    "Want to keep any of your writing? Copy it from the list, or use View trade to open that "
+    "trade's journal in a new tab."
 )
+DELETE_HAS_RISK = "Has a stop or planned risk amount."
+DELETE_VIEW_TRADE = "View trade"
+DELETE_VIEW_SR = "for {symbol}, opens in a new tab"
 DELETE_NO_NOTE = "(no written note)"
 DELETE_SHOW_ALL = "Show all {n}"
 RULES_FOLLOWED = "followed"
@@ -180,3 +185,120 @@ DELETED_NO_TRADES = "Import deleted. No trades were affected. Ready when you are
 DELETED_FROM_BANNER = "If you meant to add an Account name, it's open below."
 DELETE_ALREADY_GONE = "That import was already deleted."
 DELETED_BEFORE = "That import was deleted."  # old /imports/<id>/ link (3.4, 4)
+
+# Journal page, My rules, trades list journal column, Avg R card lines
+# (docs/design/journaling.md section 12; verbatim, the design doc owns the wording).
+JOURNAL_TITLE = "Journal: {symbol}"
+JOURNAL_BACK = "Trades"
+TRADE_ENTRIES = "{n} entries"
+JOURNAL_INTRO = (
+    "Nothing here is required. Save whatever you have; you can come back and change it."
+)
+NOT_FOUND_TITLE = "We couldn't find that trade"
+NOT_FOUND_BODY = "It may have been removed along with an import."
+NOT_FOUND_LINK = "Back to trades"
+
+RULES_HEADING = "My rules"
+RULES_ACTION_ADD = "Add"
+RULES_ACTION_EDIT = "Edit"
+RULES_ACTION_CLOSE = "Close"
+RULES_PROMPT = "Add your rules so you can check each trade against them."
+RULES_LABEL = "Your rules"
+RULES_HELP = (
+    "In your own words. Your rules aren't saved with each answer, so if you reword them, past "
+    "answers still reflect the earlier wording."
+)
+RULES_SAVE = "Save rules"
+RULES_SAVE_BUSY = "Saving..."
+RULES_SAVED = "Your rules are saved."
+# Django MaxLengthValidator params.
+RULES_TOO_LONG = (
+    "Your rules are %(show_value)d characters and the limit is %(limit_value)d. Shorten them a "
+    "little."
+)
+RULES_SAVE_FAILED = (
+    "We couldn't save your rules just now. Your text is still here, so try again in a moment."
+)
+
+FOLLOWED_LEGEND = "Did you follow your rules on this trade?"
+FOLLOWED_HELP = (
+    "This is what marks a trade as journaled. You can leave it for later and change your "
+    "answer any time."
+)
+FOLLOWED_YES = "Followed my rules"
+FOLLOWED_NO = "Didn't follow my rules"
+
+NOTE_LABEL = "Note"
+NOTE_HELP = (
+    "What was your thinking going in, and how did it go? Anything you'd want to remember."
+)
+NOTE_TOO_LONG = (
+    "That note is %(show_value)d characters and the limit is %(limit_value)d. Shorten it a "
+    "little."
+)
+COUNTER = "{n} / {limit}"
+COUNTER_LIVE_NEAR = "You're close to the {limit}-character limit."
+COUNTER_LIVE_OVER = "Over the {limit}-character limit by {n}."
+
+RISK_SUMMARY = "Risk for Avg R (optional)"
+RISK_INTRO = "Add a stop or a planned risk to include this trade in Avg R. Both are optional."
+STOP_LABEL = "Stop price"
+STOP_HELP_LONG = (
+    "Your initial stop, as a price. For this long trade it sits below your entry of {entry}."
+)
+STOP_HELP_SHORT = (
+    "Your initial stop, as a price. For this short trade it sits above your entry of {entry}."
+)
+STOP_HELP_MULTI_LEG = (
+    "This trade has more than one entry, so a stop can't give R. Enter planned risk to get R on "
+    "this trade."
+)
+RISK_LABEL = "Planned risk"
+RISK_HELP = "The amount you planned to risk on this trade, in {currency}, before fees."
+RISK_BOTH_SET = "Planned risk is used for R when both are set."
+STOP_NOT_NUMBER = "Enter a number like 19845.50. Use a period for decimals."
+STOP_DECIMALS = "Use up to 10 decimal places."
+STOP_WRONG_SIDE = "Your stop should sit on the loss side of your entry price."
+RISK_NOT_NUMBER = "Enter a number like 62.50. Use a period for decimals."
+RISK_DECIMALS = "Use up to 4 decimal places."
+RISK_NOT_POSITIVE = "Planned risk needs to be more than 0."
+NUMBER_TOO_LARGE = "That number is too large."
+
+R_STATUS_OK = "This trade counts in Avg R."
+R_STATUS_TRADE_OPEN = "This trade is still open. R is worked out once it closes."
+R_STATUS_RISK_NOT_POSITIVE = (
+    "The saved planned risk isn't more than 0, so this trade is left out of Avg R. Enter a new "
+    "amount to fix it."
+)
+R_STATUS_CURRENCY_MISMATCH = (
+    "Your saved planned risk is in {risk_currency}, but this trade is in {trade_currency}, so "
+    "it's left out of Avg R. Save a new amount to update it."
+)
+R_STATUS_STOP_NOT_A_RISK = (
+    "Your saved stop isn't on the loss side of this trade's entry price, so it's left out of "
+    "Avg R."
+)
+R_STATUS_STOP_MULTI_LEG = (
+    "This trade has more than one entry, so a stop can't give R. Enter planned risk to get R on "
+    "this trade."
+)
+
+JOURNAL_SAVE = "Save journal"
+JOURNAL_SAVE_BUSY = "Saving..."
+JOURNAL_BACK_TO_TRADES = "Back to trades"
+JOURNAL_SAVED = "Journal saved."
+JOURNAL_NOTHING_TO_SAVE = "Nothing to save yet. Add a note, an answer, or a risk amount."
+JOURNAL_SAVE_FAILED = (
+    "We couldn't save that just now. Your text is still here, so try again in a moment."
+)
+
+LIST_JOURNAL_ADD = "Add journal"
+LIST_JOURNAL_FOLLOWED = "Followed rules"
+LIST_JOURNAL_NOT_FOLLOWED = "Didn't follow rules"
+LIST_JOURNAL_NOTE_ONLY = "Note only"
+LIST_JOURNAL_RISK_ONLY = "Risk only"
+LIST_JOURNAL_NOTE_AND_RISK = "Note and risk"
+LIST_JOURNAL_SR_CONTEXT = "{state} for {symbol}, opened {opened}"
+
+AVG_R_LEFT_OUT_ONE = "Left out: 1 closed trade without usable risk"
+AVG_R_LEFT_OUT_MANY = "Left out: {n} closed trades without usable risk"

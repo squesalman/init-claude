@@ -260,6 +260,9 @@ def test_card_and_help_copy_has_no_evaluative_words():
         copy.AVG_R_SR, copy.AVG_R_SR_EMPTY,
         copy.TRADES_EMPTY_B_BODY, copy.TRADES_EMPTY_B_ACTION,
     ]
+    # "(trades with one entry only)" in CALC_AVG_R is scope, not grading (verbatim from
+    # docs/design/journaling.md 12); every other "only" still fails.
+    strings = [s.replace("one entry only", "one entry") for s in strings]
     assert [s for s in strings if _EVALUATIVE.search(s)] == []
     assert not re.search(r"\d{4}|coming soon", copy.AVG_R_HELP, re.I)  # AC 21: no date, no promise
 
@@ -271,10 +274,15 @@ def test_row_shape_closed_and_open(logged_in, user):
     make(user, "-150", hold=timedelta(hours=1, minutes=5))
     make(user, None)
     rows = {r["result"]: r for r in ctx(logged_in)["trades"]}
-    assert rows["loss"] == {
+    loss = rows["loss"]
+    assert loss == {
         "symbol": "CLZ6", "direction": "long", "quantity": "1", "entry": "100.00",
         "exit": "-50.00", "opened_at": T0, "opened": "Jun 15, 2:00 PM", "duration": "1h 05m",
         "result": "loss", "net_pnl": "-$150.00", "account": "no name",
+        # J2 journal column (ADR-0007 section 9); journal/test_journal_views.py covers states.
+        "id": loss["id"], "journal_url": f"/trades/{loss['id']}/journal/",
+        "journal_state": "add", "journal_label": "Add journal",
+        "journal_sr": "Add journal for CLZ6, opened Jun 15, 2:00 PM",
     }
     assert rows["open"]["exit"] is None and rows["open"]["duration"] is None
     assert rows["open"]["net_pnl"] is None

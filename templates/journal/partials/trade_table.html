@@ -1,4 +1,4 @@
-{# TradeTable (design 5.1): desktop only, every trade, sort links in the headers (plain GETs, no htmx). The region scrolls both ways so the sticky header holds while the rows scroll and wide columns never scroll the page. Rows are not links (no trade page yet). #}
+{# TradeTable (design 5.1): desktop only, every trade, sort links in the headers (plain GETs, no htmx). The region scrolls both ways so the sticky header holds while the rows scroll and wide columns never scroll the page. Each row's last cell is its journal link (docs/design/journaling.md 5.1). #}
 <div role="region" aria-labelledby="trades-caption" tabindex="0" class="table-scroll mt-6 hidden sm:block rounded-lg border border-border bg-surface">
 <table class="data-table">
   <caption id="trades-caption" class="sr-only">{{ copy.TRADES_CAPTION }}</caption>
@@ -14,11 +14,12 @@
       <th scope="col">Result</th>
       {% with link=sort_links.pnl %}<th scope="col" class="num" aria-sort="{{ link.aria_sort }}"><a href="{{ link.url }}" class="sort-link">Net P&amp;L{% if link.sorted_text %}<span aria-hidden="true">{% if dir == "asc" %}↑{% else %}↓{% endif %}</span><span class="sr-only">{{ link.sorted_text }}</span>{% endif %}</a></th>{% endwith %}
       {% if show_account %}<th scope="col">Account</th>{% endif %}
+      <th scope="col">Journal</th>
     </tr>
   </thead>
   <tbody>
     {% for t in trades %}
-    <tr>
+    <tr id="trade-{{ t.id }}">
       <td class="whitespace-nowrap tabular-nums">{{ t.opened }}</td>
       <td class="break-all font-medium">{{ t.symbol }}</td>
       <td class="whitespace-nowrap"><span class="inline-flex items-center gap-1">{% if t.direction == "long" %}{% include "partials/icon.html" with name="arrow-up" %}Long{% else %}{% include "partials/icon.html" with name="arrow-down" %}Short{% endif %}</span></td>
@@ -29,6 +30,7 @@
       <td>{% include "journal/partials/result_badge.html" with result=t.result %}</td>
       <td class="num whitespace-nowrap{% if t.result == "win" %} text-gain{% elif t.result == "loss" %} text-loss{% endif %}">{{ t.net_pnl|default:"Open" }}</td>
       {% if show_account %}<td><span class="block max-w-[24ch] truncate" title="{{ t.account }}">{{ t.account }}</span></td>{% endif %}
+      <td>{% include "journal/partials/journal_link.html" %}</td>
     </tr>
     {% endfor %}
   </tbody>

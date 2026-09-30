@@ -15,7 +15,7 @@ from journal import copy
 from journal.models import JournalEntry
 from journal.test_delete_views import LONG_NOTE, confirm_url, journal, post_delete, rows
 from journal.test_import_views import T1, T1_CHANGED, T2, T3, csv_bytes, detail, uploaded
-from journal.views import _shown_max_pk
+from journal.views import _shown_confirmed
 
 HTMX = {"HX-Request": "true"}
 BLANK_BANNER = (
@@ -51,8 +51,39 @@ def delete_links(markup, pk):
 # --- confirm body: variants (3.3) -------------------------------------------------------------
 
 
+def test_risk_only_entry_counts_in_n_not_m_and_is_never_blank(logged_in, user):
+    """Spec AC 32 / design 7 item 1."""
+    batch = uploaded(logged_in, csv_bytes(T1))
+    (entry,) = journal(user, batch)
+    JournalEntry.unscoped.filter(pk=entry.pk).update(stop_price="79.90")
+
+    resp = logged_in.get(confirm_url(batch.pk), headers=HTMX)
+
+    assert (resp.context["journal_count"], resp.context["noted_count"]) == (1, 0)
+    [item] = resp.context["journal_list"]
+    assert item["has_risk"] is True and item["note"] == ""
+    d = Doc(body(resp))
+    assert "Rules: not answered" in d.text and copy.DELETE_NO_NOTE in d.text
+    assert copy.DELETE_HAS_RISK in d.text
+    assert copy.DELETE_JOURNAL_BODY_ONE.format(noted=copy.NOTED_NONE) in d.text
+
+
+def test_view_trade_links_open_the_trade_journal_in_a_new_tab(logged_in, user):
+    """Spec AC 33 / design 7 item 2; follow-ups row 32."""
+    batch = uploaded(logged_in, csv_bytes(T1))
+    (entry,) = journal(user, batch, note="n")
+
+    d = Doc(body(logged_in.get(confirm_url(batch.pk), headers=HTMX)))
+
+    link = d.one("a", href=f"/trades/{entry.opening_execution_id}/journal/")
+    assert (link["target"], link["rel"]) == ("_blank", "noopener")
+    assert copy.DELETE_VIEW_SR.format(symbol="CLZ6") in d.text
+    assert copy.DELETE_HAS_RISK not in d.text  # a note-only entry has no risk line
+    assert logged_in.get(link["href"]).status_code == 200  # the target exists
+
+
 def _shown(d, user, batch):
-    return _shown_max_pk(user.pk, batch.pk, d.one("input", name="shown")["value"])
+    return _shown_confirmed(user.pk, batch.pk, d.one("input", name="shown")["value"])[0]
 
 
 def test_simple_variant_has_no_checkbox_focuses_cancel_and_says_permanent(logged_in, user):
@@ -94,7 +125,7 @@ def test_two_step_variant_lists_entries_in_a_labelled_region_and_gates_on_the_ti
     assert copy.DELETE_NO_NOTE in d.text
     assert "Rules: followed" in d.text and "Rules: not followed" in d.text
     assert copy.DELETE_LIST_HELPER in d.text
-    assert "View trade" not in d.text  # no trade page yet: no broken link
+    assert len(d.all("a", target="_blank")) == 2  # a View trade link per entry (AC 33)
 
     tick = d.one("input", type="checkbox")
     assert (tick["name"], tick["value"], tick["x-ref"]) == ("confirm", "on", "tick")
@@ -149,9 +180,10 @@ def test_unticked_post_after_the_entries_vanished_shows_the_stale_notice(logged_
     (the stale notice) instead of pointing at a missing box or saying nothing."""
     batch = uploaded(logged_in, csv_bytes(T1))
     entries = journal(user, batch)
+    shown = Doc(body(logged_in.get(confirm_url(batch.pk)))).one("input", name="shown")["value"]
     JournalEntry.unscoped.filter(pk__in=[e.pk for e in entries]).delete()  # gone in another tab
 
-    markup = body(post_delete(logged_in, batch.pk, max_pk=entries[-1].pk, headers=HTMX))
+    markup = body(logged_in.post(confirm_url(batch.pk), {"shown": shown}, headers=HTMX))
 
     assert copy.DELETE_STALE in markup
     assert copy.DELETE_NOT_TICKED not in markup

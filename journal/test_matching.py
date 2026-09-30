@@ -165,3 +165,48 @@ def test_net_pnl_rounds_once_half_even_to_cents():
     assert trade.gross_pnl == Decimal("0.00")  # 0.005 -> half-even to 0.00
     assert trade.fees == Decimal("0.01")
     assert trade.net_pnl == Decimal("0.00")  # 0.005 - 0.01 = -0.005 -> -0.00
+
+
+# --- ADR-0007 section 3: entry_lot_count and multiplier (domain section 3 Terms) -----------
+
+
+def test_entry_lot_count_is_1_for_single_entry_vectors_1_and_18():
+    [v1] = derive_trades(
+        [ex(1, "buy", 10, "100.00", "1.00", 0), ex(2, "sell", 10, "105.00", "1.00", 1)]
+    )
+    [v18] = derive_trades([  # one entry lot, two partial exits
+        ex(1, "buy", 100, "50.00", "2.00", 0),
+        ex(2, "sell", 40, "51.00", "0", 1),
+        ex(3, "sell", 60, "50.60", "0", 2),
+    ])
+
+    assert (v1.entry_lot_count, v18.entry_lot_count) == (1, 1)
+    assert v18.avg_entry_price == Decimal("50.00")
+
+
+def test_entry_lot_count_is_2_for_the_vector_2_scale_in():
+    [trade] = derive_trades([
+        ex(1, "buy", 100, "10.00", "1.00", 0),
+        ex(2, "buy", 50, "10.20", "0.50", 1),
+        ex(3, "sell", 80, "10.50", "0.80", 2),
+        ex(4, "sell", 70, "10.60", "0.70", 3),
+    ])
+
+    assert trade.entry_lot_count == 2
+
+
+def test_vector_3_flip_leftover_is_one_lot_of_the_new_trade():
+    closed, opened = derive_trades(
+        [ex(1, "buy", 10, "100.00"), ex(2, "sell", 15, "105.00", minutes=1)]
+    )
+
+    assert (closed.entry_lot_count, opened.entry_lot_count) == (1, 1)
+
+
+def test_multiplier_comes_from_the_opening_execution():
+    [trade] = derive_trades([
+        ex(1, "buy", 2, "80.00", multiplier="1000"),
+        ex(2, "sell", 2, "80.15", minutes=1, multiplier="1000"),
+    ])
+
+    assert trade.multiplier == Decimal("1000")

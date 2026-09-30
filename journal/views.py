@@ -1,4 +1,6 @@
 import logging
+from datetime import datetime
+from urllib.parse import urlsplit
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -9,29 +11,46 @@ from django.db import DatabaseError
 from django.db.models import Case, Count, Exists, Max, OuterRef, Q, Subquery, Value, When
 from django.http import Http404, HttpResponse
 from django.shortcuts import redirect, render
-from django.urls import reverse
+from django.urls import Resolver404, resolve, reverse
 from django.utils import dateformat, timezone
 from django.utils.cache import patch_vary_headers
-from django.utils.http import urlencode
+from django.utils.http import url_has_allowed_host_and_scheme, urlencode
 from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_http_methods, require_POST
 
 from accounts import copy
 from journal import copy as import_copy
 from journal import display
 from journal.decorators import htmx_login_required, is_htmx
-from journal.forms import UploadForm, safe_filename
+from journal.forms import JournalEntryForm, RulesForm, UploadForm, safe_filename
 from journal.importers.topstep import ImportFileError, parse_timestamp
 from journal.matching import derive_trades
-from journal.models import Execution, ImportBatch, JournalEntry, RawImportRow
+from journal.models import (
+    CrossTenantForeignKeyError,
+    Execution,
+    ImportBatch,
+    JournalEntry,
+    RawImportRow,
+)
 from journal.services import (
     BROKER,
     TRY_AGAIN,
     ImportRetryError,
     StaleConfirm,
     delete_import_batch,
+    find_trade,
     import_file,
+    save_journal_entry,
 )
-from journal.stats import compute_stats
+from journal.stats import (
+    RISK_CURRENCY_MISMATCH,
+    RISK_NOT_POSITIVE,
+    STOP_NOT_A_RISK,
+    STOP_PRICE_MULTI_LEG,
+    TRADE_OPEN,
+    compute_stats,
+    r_multiple,
+)
 
 log = logging.getLogger(__name__)
 
@@ -134,15 +153,50 @@ def _opened(when) -> str:
     return dateformat.format(local, "M j, g:i A" if this_year else "M j, Y, g:i A")
 
 
-def _trade_row(trade) -> dict:
+_JOURNAL_LABELS = {  # design 5.3 state -> label; the state is also the icon key
+    "add": import_copy.LIST_JOURNAL_ADD,
+    "followed": import_copy.LIST_JOURNAL_FOLLOWED,
+    "not_followed": import_copy.LIST_JOURNAL_NOT_FOLLOWED,
+    "note_only": import_copy.LIST_JOURNAL_NOTE_ONLY,
+    "risk_only": import_copy.LIST_JOURNAL_RISK_ONLY,
+    "note_and_risk": import_copy.LIST_JOURNAL_NOTE_AND_RISK,
+}
+
+
+def _has_risk(entry) -> bool:
+    return entry.stop_price is not None or entry.planned_risk_amount is not None
+
+
+def _journal_state(entry) -> str:
+    """Journaled = answered (spec). An entry with nothing in it reads as "add" (design 11.2)."""
+    if entry is None:
+        return "add"
+    if entry.rules_followed is not None:
+        return "followed" if entry.rules_followed else "not_followed"
+    note, risk = bool(entry.note.strip()), _has_risk(entry)
+    return "note_and_risk" if note and risk else "note_only" if note else (
+        "risk_only" if risk else "add"
+    )
+
+
+def _trade_row(trade, entry=None) -> dict:
+    opened, state = _opened(trade.opened_at), _journal_state(entry)
+    label = _JOURNAL_LABELS[state]
     return {
+        "id": trade.opening_execution_id,  # the trade id (ADR-0003 section 6); id="trade-<id>"
+        "journal_url": reverse("trade_journal", args=[trade.opening_execution_id]),
+        "journal_state": state,
+        "journal_label": label,
+        "journal_sr": import_copy.LIST_JOURNAL_SR_CONTEXT.format(
+            state=label, symbol=trade.symbol, opened=opened
+        ),
         "symbol": trade.symbol,
         "direction": trade.direction,  # "long" | "short"
         "quantity": display.quantity(trade.quantity),
         "entry": display.price(trade.avg_entry_price),
         "exit": None if trade.is_open else display.price(trade.avg_exit_price),
         "opened_at": trade.opened_at,
-        "opened": _opened(trade.opened_at),
+        "opened": opened,
         "duration": None if trade.is_open else display.duration(trade.closed_at - trade.opened_at),
         "result": _result(trade),  # "win" | "loss" | "breakeven" | "open"
         "net_pnl": None if trade.is_open else display.money(trade.net_pnl),
@@ -159,6 +213,7 @@ def _cards(stats) -> dict:
     total = stats.total_pnl if stats else None
     avg_r = stats.avg_r if stats else None
     avg_r_n = stats.avg_r_n if stats else 0
+    left_out = stats.avg_r_left_out if stats else 0
     return {
         "win_rate": {
             "value": copy.WIN_RATE_VALUE.format(rate=stats.win_rate, n=win_n) if win_n
@@ -182,6 +237,10 @@ def _cards(stats) -> dict:
             "value": copy.AVG_R_VALUE.format(r=avg_r, n=avg_r_n) if avg_r_n else copy.NO_VALUE,
             "help": None if avg_r_n else copy.AVG_R_HELP,  # shown only when n = 0
             "sr": copy.AVG_R_SR.format(r=avg_r, n=avg_r_n) if avg_r_n else copy.AVG_R_SR_EMPTY,
+            # Design 6: whenever N > 0, n = 0 included; open trades are in neither.
+            "left_out": _plural(
+                left_out, import_copy.AVG_R_LEFT_OUT_ONE, import_copy.AVG_R_LEFT_OUT_MANY
+            ) if left_out else None,
         },
     }
 
@@ -201,11 +260,19 @@ def trades(request):
     # ponytail: slice 1 is USD-only (design doc); a non-USD closed trade would otherwise
     # show as (n=0) on every card with no error. Warn instead of failing silently. The trades
     # table also hard-codes "$" via display.money; both go when a second currency ships.
-    stats = compute_stats(derived)
+    # One query for every entry (ADR-0007 section 8), so the count stays constant.
+    entries = (
+        {e.opening_execution_id: e for e in JournalEntry.objects.for_user(user)}
+        if derived else {}
+    )
+    stats = compute_stats(derived, entries)
     if set(stats) - {"USD"}:
         log.warning("non-USD closed trades present, not reflected in stat cards: %s", set(stats))
     context = {
-        "trades": [_trade_row(t) for t in _sorted(derived, sort, direction)],
+        "trades": [
+            _trade_row(t, entries.get(t.opening_execution_id))
+            for t in _sorted(derived, sort, direction)
+        ],
         "sort": sort,
         "dir": direction,
         "sort_links": _sort_links(sort, direction),
@@ -621,7 +688,8 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
         opening_execution__raw_import_row__import_batch=batch
     )
     totals = entries.aggregate(
-        n=Count("pk"), m=Count("pk", filter=~Q(note__regex=r"^\s*$")), newest=Max("pk")
+        n=Count("pk"), m=Count("pk", filter=~Q(note__regex=r"^\s*$")), newest=Max("pk"),
+        newest_at=Max("updated_at"),
     )
     n, m = totals["n"], totals["m"]
     if notice == import_copy.DELETE_NOT_TICKED and not n:
@@ -642,8 +710,11 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
         "trade_count": trade_count,
         "other_rows_count": other_rows,
         "journal_count": n,
-        # Posted back as `shown`: the newest entry pk on screen (0 = none), not the count (29d).
-        "shown_token": _shown_signer(user.pk, batch.pk).sign(str(totals["newest"] or 0)),
+        # Posted back as `shown`: the newest entry pk on screen (0 = none), not the count (29d),
+        # and the newest updated_at, so an edit after this render reads as stale too.
+        "shown_token": _shown_signer(user.pk, batch.pk).sign(
+            _shown_payload(totals["newest"], totals["newest_at"])
+        ),
         "noted_count": m,
         "journal_list": [
             {
@@ -651,7 +722,9 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
                 "opened_at": e.opening_execution.executed_at,
                 "rules": _RULES[e.rules_followed],
                 "note": e.note,  # full text: the dialog tells users to copy it from here; "" = none
-                "url": None,  # no trade page yet (PR D)
+                "url": reverse("trade_journal", args=[e.opening_execution_id]),
+                "view_sr": import_copy.DELETE_VIEW_SR.format(symbol=e.opening_execution.symbol),
+                "has_risk": _has_risk(e),  # a risk-only entry is never shown as blank (AC 32)
             }
             for e in listed
         ],
@@ -674,18 +747,27 @@ def _delete_context(request, batch, notice, from_banner) -> dict:
 
 
 def _shown_signer(user_id, pk) -> signing.Signer:
-    """The newest journal-entry pk the user was shown, signed and bound to user and batch
-    (a plain form value could be inflated past the stale check). A forged, replayed or
-    missing token only lowers it, which fails safe (StaleConfirm)."""
+    """The newest journal-entry pk and updated_at the user was shown (ADR-0007 section 7),
+    signed and bound to user and batch (a plain form value could be inflated past the stale
+    check). A forged, replayed or missing token only lowers it, which fails safe."""
     return signing.Signer(salt=f"import-delete-max-pk:{user_id}:{pk}")
 
 
-def _shown_max_pk(user_id, pk, token) -> int:
-    """The signed newest pk shown, 0 for none or a bad token."""
+def _shown_payload(newest_pk, newest_updated_at) -> str:
+    return f"{newest_pk or 0}:{newest_updated_at.isoformat() if newest_updated_at else ''}"
+
+
+def _shown_confirmed(user_id, pk, token) -> tuple[int, datetime | None]:
+    """The signed "<max_pk>:<max_updated_at ISO>". (0, None) = nothing shown: a bad or
+    missing token, an old-format one (pk only), or any part that doesn't parse."""
     try:
-        return int(_shown_signer(user_id, pk).unsign(token or ""))
+        head, sep, tail = _shown_signer(user_id, pk).unsign(token or "").partition(":")
+        shown_pk, shown_at = int(head), datetime.fromisoformat(tail)
     except (signing.BadSignature, ValueError):
-        return 0
+        return 0, None
+    if not sep or shown_at.tzinfo is None:
+        return 0, None
+    return shown_pk, shown_at
 
 
 def _deleted_flash(result, from_banner) -> str:
@@ -712,13 +794,13 @@ def import_delete(request, pk):
     from_banner = source.get("from") == "banner"
     notice = None
     if request.method == "POST":
-        shown_pk = _shown_max_pk(user.pk, pk, source.get("shown"))
+        shown_pk, shown_at = _shown_confirmed(user.pk, pk, source.get("shown"))
         ticked = source.get("confirm") == "on"
         if shown_pk and not ticked:
             notice = import_copy.DELETE_NOT_TICKED  # the server enforces the box too
         else:
             try:
-                result = delete_import_batch(user, pk, confirmed_max_pk=shown_pk)
+                result = delete_import_batch(user, pk, shown_pk, shown_at)
             except ImportBatch.DoesNotExist:
                 return _gone(request, pk, import_copy.DELETE_ALREADY_GONE)
             except StaleConfirm:
@@ -743,3 +825,193 @@ def import_delete(request, pk):
     response = render(request, template, _delete_context(request, batch, notice, from_banner))
     patch_vary_headers(response, ["HX-Request"])
     return response
+
+
+# --- Journaling (ADR-0007 sections 8, 9) --------------------------------------------------------
+
+_R_STATUS = {  # design 3.6; no line for no_risk_input
+    None: import_copy.R_STATUS_OK,
+    TRADE_OPEN: import_copy.R_STATUS_TRADE_OPEN,
+    RISK_NOT_POSITIVE: import_copy.R_STATUS_RISK_NOT_POSITIVE,
+    RISK_CURRENCY_MISMATCH: import_copy.R_STATUS_CURRENCY_MISMATCH,
+    STOP_NOT_A_RISK: import_copy.R_STATUS_STOP_NOT_A_RISK,
+    STOP_PRICE_MULTI_LEG: import_copy.R_STATUS_STOP_MULTI_LEG,
+}
+
+
+def _r_status(trade, entry) -> str | None:
+    """The saved entry's R, in words, from the same function the stat cards use. Only when
+    an entry with a risk value exists, or the trade is open (design 3.6)."""
+    if not trade.is_open and (entry is None or not _has_risk(entry)):
+        return None
+    _, reason = r_multiple(trade, entry)
+    text = _R_STATUS.get(reason)
+    if text is None:
+        return None
+    risk_currency = entry.risk_currency if entry is not None else None
+    return text.format(risk_currency=risk_currency, trade_currency=trade.currency)
+
+
+def _saved(trade, entry) -> dict:
+    """The entry as stored, read before the form validates: ModelForm validation writes the
+    posted values onto its instance, and a failed save must not describe unsaved values."""
+    return {"r_status": _r_status(trade, entry), "has_risk": entry is not None and _has_risk(entry)}
+
+
+def _trade_not_found(request):
+    """The one 404 for a missing id, another user's id, a closing fill, and a trade gone
+    before a POST (AC 11, 12: identical by construction). No project 404.html (row 21)."""
+    return render(request, "journal/trade_not_found.html", {"copy": import_copy}, status=404)
+
+
+def _trade_summary(trade) -> dict:
+    row = _trade_row(trade)
+    keys = ("symbol", "direction", "result", "net_pnl", "opened", "quantity", "entry", "exit",
+            "duration")
+    return {
+        **{k: row[k] for k in keys},
+        "id": trade.opening_execution_id,
+        "is_open": trade.is_open,
+        "zone": timezone.get_current_timezone_name(),
+        "account": trade.account_label or None,
+        "entries": import_copy.TRADE_ENTRIES.format(n=trade.entry_lot_count)
+        if trade.entry_lot_count > 1 else None,
+    }
+
+
+def _rules_context(user, rules_form=None, *, rules_open=False, status=None, notice=None,
+                   next_url=None) -> dict:
+    """The rules panel partial's keys; the same partial renders in the page and as the
+    /rules/ htmx response."""
+    return {
+        "rules_form": rules_form or RulesForm(initial={"trading_rules": user.trading_rules}),
+        "rules_text": user.trading_rules,  # the saved rules, for the closed preview
+        "rules_open": rules_open,  # only after a rules save, error or failure
+        "rules_status": status,
+        "rules_notice": notice,
+        "rules_next": next_url,
+        "copy": import_copy,
+    }
+
+
+def _journal_page(request, trade, form, saved, *, notice=None, **rules):
+    """ADR-0007 section 9 contract. Uses no query, so a failed save can re-render."""
+    multi_leg = trade.entry_lot_count > 1
+    side_help = import_copy.STOP_HELP_LONG if trade.direction == "long" else (
+        import_copy.STOP_HELP_SHORT
+    )
+    risk_values = [form[name].value() for name in ("stop_price", "planned_risk_amount")]
+    journal_url = reverse("trade_journal", args=[trade.opening_execution_id])
+    stop_help = import_copy.STOP_HELP_MULTI_LEG if multi_leg else side_help.format(
+        entry=display.price(trade.avg_entry_price)
+    )
+    risk_help = import_copy.RISK_HELP.format(currency=trade.currency)
+    # Per-trade help on the fields themselves, so the rendered input's aria-describedby
+    # points at it (design 3.5, 8).
+    form.fields["stop_price"].help_text = stop_help
+    form.fields["planned_risk_amount"].help_text = risk_help
+    context = {
+        "title": import_copy.JOURNAL_TITLE.format(symbol=trade.symbol),
+        "trade": _trade_summary(trade),
+        "form": form,
+        **_rules_context(request.user, next_url=journal_url, **rules),
+        "risk_open": multi_leg or saved["has_risk"]
+        or form.has_error("stop_price") or form.has_error("planned_risk_amount"),
+        "multi_leg": multi_leg,
+        "stop_help": stop_help,
+        "risk_currency": trade.currency,
+        "risk_help": risk_help,
+        "both_set": all(v is not None and str(v).strip() for v in risk_values),
+        "r_status": saved["r_status"],
+        "notice": notice,
+        "back_url": f"{reverse('trades')}#trade-{trade.opening_execution_id}",
+        "error_summary_title": copy.SIGNUP_ERROR_SUMMARY_TITLE,  # design 12: reuse
+        "copy": import_copy,
+    }
+    return render(request, "journal/journal_form.html", context)
+
+
+@htmx_login_required
+@require_http_methods(["GET", "POST"])
+def trade_journal(request, pk):
+    user = request.user
+    found = find_trade(user, pk)
+    if found is None:
+        return _trade_not_found(request)
+    opening, trade = found
+    entry = JournalEntry.objects.for_user(user).filter(opening_execution_id=pk).first()
+    saved = _saved(trade, entry)
+    data = request.POST if request.method == "POST" else None
+    form = JournalEntryForm(data, instance=entry or JournalEntry(), user=user, trade=trade)
+    if data is None or not form.is_valid():
+        return _journal_page(request, trade, form, saved)
+    try:
+        result = save_journal_entry(user, opening, trade, **form.cleaned_data)
+    except (DatabaseError, CrossTenantForeignKeyError) as exc:
+        # Class, user id and model only: the cross-tenant message names another user's id.
+        log.error(
+            "journal save failed: %s user=%s model=JournalEntry", type(exc).__name__, user.pk
+        )
+        notice = {"variant": "attention", "text": import_copy.JOURNAL_SAVE_FAILED}
+        return _journal_page(request, trade, form, saved, notice=notice)
+    if result is None:
+        notice = {"variant": "info", "text": import_copy.JOURNAL_NOTHING_TO_SAVE}
+        return _journal_page(request, trade, form, saved, notice=notice)
+    messages.success(request, import_copy.JOURNAL_SAVED)
+    return redirect(reverse("trade_journal", args=[pk]))  # PRG, stay on the page (decision 8)
+
+
+def _journal_pk(request, target) -> int | None:
+    """The trade pk in a `next` that is this host's journal URL, else None. Only the pk is
+    kept: the redirect is rebuilt with reverse(), never the posted string (follow-ups 1)."""
+    if not target or not url_has_allowed_host_and_scheme(
+        target, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        return None
+    try:
+        match = resolve(urlsplit(target).path)
+    except Resolver404:
+        return None
+    return match.kwargs["pk"] if match.url_name == "trade_journal" else None
+
+
+@htmx_login_required
+@require_POST
+def save_rules(request):
+    """Writes request.user only (AC 29). htmx: the panel, 200 in every outcome (htmx 2 swaps
+    only 2xx). No JS: PRG on success, else the journal page with the panel open."""
+    user = request.user
+    pk = _journal_pk(request, request.POST.get("next"))
+    next_url = reverse("trade_journal", args=[pk]) if pk is not None else None
+    form = RulesForm(request.POST)
+    status = notice = None
+    if form.is_valid():
+        previous, user.trading_rules = user.trading_rules, form.cleaned_data["trading_rules"]
+        try:
+            user.save(update_fields=["trading_rules"])
+        except DatabaseError as exc:
+            user.trading_rules = previous  # the preview keeps showing what is saved
+            log.error("rules save failed: %s user=%s", type(exc).__name__, user.pk)
+            notice = import_copy.RULES_SAVE_FAILED
+        else:
+            status = import_copy.RULES_SAVED
+            if not is_htmx(request):
+                messages.success(request, import_copy.RULES_SAVED)
+                return redirect(next_url or reverse("trades"))
+    rules = {"rules_form": form, "rules_open": True, "status": status, "notice": notice}
+    if is_htmx(request):
+        response = render(
+            request, "journal/partials/rules_panel.html",
+            _rules_context(user, next_url=next_url, **rules),
+        )
+        patch_vary_headers(response, ["HX-Request"])
+        return response
+    if pk is None:  # no JS and no valid next: only a tampered form gets here
+        return HttpResponse("Bad request.", status=400, content_type="text/plain")
+    found = find_trade(user, pk)
+    if found is None:
+        return _trade_not_found(request)
+    _, trade = found
+    entry = JournalEntry.objects.for_user(user).filter(opening_execution_id=pk).first()
+    journal_form = JournalEntryForm(instance=entry or JournalEntry(), user=user, trade=trade)
+    return _journal_page(request, trade, journal_form, _saved(trade, entry), **rules)

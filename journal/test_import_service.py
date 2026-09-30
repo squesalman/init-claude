@@ -80,7 +80,7 @@ def test_fixture_end_to_end_trades_and_stats(user):
 
     trades = derive_trades(executions(user).order_by("executed_at", "id"))
     assert len(trades) == 5  # T4's nested rows stay two trades
-    usd = compute_stats(trades)["USD"]
+    usd = compute_stats(trades, {})["USD"]
     assert (usd.win_rate, usd.win_rate_n, usd.breakeven_count) == (Decimal("75.00"), 4, 1)
     assert (usd.total_pnl, usd.total_n) == (Decimal("704.44"), 5)
 

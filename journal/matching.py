@@ -33,6 +33,8 @@ class Trade:
     currency: str
     is_open: bool
     execution_ids: tuple
+    entry_lot_count: int  # 1 = single-entry, 2+ = multi-leg (domain section 3 Terms)
+    multiplier: Decimal  # the opening execution's contract_multiplier
 
 
 def derive_trades(executions) -> list[Trade]:
@@ -59,6 +61,7 @@ class _Draft:
     def __init__(self, execution, sign):
         self.opening, self.sign = execution, sign
         self.execution_ids = []
+        self.entry_lot_count = 0
         self.entry_qty = self.entry_value = self.exit_qty = self.exit_value = Decimal(0)
         self.gross = self.fees = Decimal(0)
 
@@ -81,6 +84,8 @@ class _Draft:
             currency=first.currency,
             is_open=is_open,
             execution_ids=tuple(self.execution_ids),
+            entry_lot_count=self.entry_lot_count,
+            multiplier=first.contract_multiplier,
         )
 
 
@@ -113,6 +118,7 @@ def _fifo(executions) -> list[Trade]:
                 draft = _Draft(execution, sign)
             draft.execution_ids.append(execution.id)
             lots.append(_Lot(execution, qty, fee))
+            draft.entry_lot_count += 1
             draft.entry_qty += qty
             draft.entry_value += execution.price * qty
 

@@ -21,8 +21,9 @@
         {% for entry in journal_list %}
         <li class="p-3">
           <p class="flex flex-wrap gap-x-4 gap-y-1"><span class="font-medium">{{ entry.symbol }}</span><span>{{ entry.opened_at|date:"M j, g:i A" }}</span><span class="badge font-normal">{% if entry.rules == copy.RULES_FOLLOWED %}{% include "partials/icon.html" with name="success" %}{% elif entry.rules == copy.RULES_NOT_FOLLOWED %}{% include "partials/icon.html" with name="failed" %}{% else %}{% include "partials/icon.html" with name="skip" %}{% endif %}<span>Rules: {{ entry.rules }}</span></span></p>
-          {# "View trade" (new tab) lands with the trade page; entry.url is always None until then. #}
           {% if entry.note %}<p class="mt-1 break-words">“{{ entry.note }}”</p>{% else %}<p class="mt-1 text-text-muted">{{ copy.DELETE_NO_NOTE }}</p>{% endif %}
+          {% if entry.has_risk %}<p class="mt-1 text-text-muted">{{ copy.DELETE_HAS_RISK }}</p>{% endif %}
+          <p class="mt-1"><a href="{{ entry.url }}" target="_blank" rel="noopener">{{ copy.DELETE_VIEW_TRADE }}<span class="sr-only"> {{ entry.view_sr }}</span></a></p>
         </li>
         {% endfor %}
       </ul>

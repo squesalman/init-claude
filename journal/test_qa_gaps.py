@@ -12,12 +12,14 @@ from journal.test_topstep_parser import T1, csv_bytes
 
 
 def _closed(net):
-    return SimpleNamespace(is_open=False, net_pnl=Decimal(net), currency="USD")
+    return SimpleNamespace(
+        opening_execution_id=None, is_open=False, net_pnl=Decimal(net), currency="USD"
+    )
 
 
 def test_win_rate_exact_tie_rounds_half_even_not_half_up():
     # 1 win in 32 = 3.125 exactly: half-even 3.12, half-up 3.13.
-    usd = compute_stats([_closed("1")] + [_closed("-1")] * 31)["USD"]
+    usd = compute_stats([_closed("1")] + [_closed("-1")] * 31, {})["USD"]
 
     assert usd.win_rate == Decimal("3.12")
 

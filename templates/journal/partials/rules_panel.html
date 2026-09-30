@@ -1,0 +1,19 @@
+{# RulesPanel (docs/design/journaling.md 3.2, 4.2; ADR-0007 section 9): the htmx swap target. Rendered inside the journal page and alone as the POST /rules/ htmx response (200 in every outcome). Native details: closed by default, open only after a rules save, error or failure. PR J2: unstyled. #}
+<div id="rules-panel">
+  <details id="rules-details"{% if rules_open %} open{% endif %}>
+    <summary>{{ copy.RULES_HEADING }} {% if rules_text %}{{ copy.RULES_ACTION_EDIT }}{% else %}{{ copy.RULES_ACTION_ADD }}{% endif %}</summary>
+    {% if rules_status %}<p role="status" tabindex="-1" autofocus>{{ rules_status }}</p>{% endif %}
+    {% if rules_notice %}<div tabindex="-1" autofocus>{% include "partials/notice.html" with variant="attention" body=rules_notice %}</div>{% endif %}
+    <form method="post" action="{% url 'rules' %}" hx-post="{% url 'rules' %}" hx-target="#rules-panel" hx-swap="outerHTML" novalidate>
+      {% csrf_token %}
+      {% if rules_next %}<input type="hidden" name="next" value="{{ rules_next }}">{% endif %}
+      {% include "partials/field.html" with field=rules_form.trading_rules %}
+      {# Shown by static/js/app.js when the POST gets no page back (5xx, network). #}
+      <div role="status" data-request-error="{{ copy.RULES_SAVE_FAILED }}">
+        <p hidden><span data-request-error-text></span></p>
+      </div>
+      <button type="submit" class="btn-secondary" data-busy="{{ copy.RULES_SAVE_BUSY }}">{{ copy.RULES_SAVE }}</button>
+    </form>
+  </details>
+  <p class="rules-preview whitespace-pre-line">{% if rules_text %}{{ rules_text }}{% else %}{{ copy.RULES_PROMPT }}{% endif %}</p>
+</div>

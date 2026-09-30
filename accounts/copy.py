@@ -74,10 +74,11 @@ BREAKEVEN_NOTE_ONE = "Excludes 1 breakeven trade."
 BREAKEVEN_NOTE_MANY = "Excludes {n} breakeven trades."
 TOTAL_PNL_VALUE = "{amount} (n={n})"
 AVG_R_VALUE = "{r} (n={n})"
+# Replaced by docs/design/journaling.md 6 and 12 (journaling ships).
 AVG_R_HELP = (
-    "Avg R shows your results in units of what you risked on each trade. It needs a stop or a "
-    "planned risk amount on the trade, which you'll be able to add once trade journaling is "
-    "available. Trades without one are left out, never counted as zero."
+    "Avg R shows your results in units of what you risked on each trade. Open a trade's "
+    "journal and add a stop or a planned risk amount to include it. Trades without one are "
+    "left out, never counted as zero."
 )
 # Screen-reader labels (6.1-6.3). {sign} is "plus ", "minus " or "" for zero.
 WIN_RATE_SR = "Win rate: {rate} percent, based on {n} trades"
@@ -97,8 +98,10 @@ CALC_TOTAL_PNL = (
     "Total P&L: the sum of net P&L after fees for closed trades. Open trades are not included."
 )
 CALC_AVG_R = (
-    "Avg R: the average of net P&L divided by the risk amount you set for each trade. Trades "
-    "without a risk amount are left out."
+    "Avg R: net P&L after fees divided by the risk you entered, averaged over closed trades "
+    "that have one. Risk is your planned risk amount if you set one, otherwise the distance "
+    "from your entry to your stop times your size (trades with one entry only). Trades without "
+    "usable risk are left out, never counted as zero."
 )
 CALC_TIMES = (
     "Times are shown in {zone}. These numbers cover all your trades on all your accounts."
