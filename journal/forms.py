@@ -114,7 +114,9 @@ class NormalizedTextField(forms.CharField):
 
 # Plain digits, optional period, optional leading minus (ruling 1); commas only as thousands
 # separators. ASCII only: \d would also match other scripts' digits.
-_PLAIN_NUMBER = re.compile(r"-?(?:\d+\.?\d*|\.\d+)", re.ASCII)
+# Linear: \d+ and \d* must not sit either side of an optional dot (quadratic on a non-match).
+_PLAIN_NUMBER = re.compile(r"-?(?:\d+(?:\.\d*)?|\.\d+)", re.ASCII)
+_MAX_NUMBER_CHARS = 40  # longest valid value: 20 digits, sign, point, thousands commas
 _GROUPED_NUMBER = re.compile(r"-?\d{1,3}(?:,\d{3})+(?:\.\d*)?", re.ASCII)
 _NUMBER_INPUT = {
     "inputmode": "decimal", "autocomplete": "off", "autocapitalize": "none", "spellcheck": "false",
@@ -145,6 +147,10 @@ class PlainDecimalField(forms.DecimalField):
         text = "" if value in self.empty_values else str(value).strip()
         if not text:
             return None
+        if len(text) > _MAX_NUMBER_CHARS:  # no number regex on megabytes (ReDoS)
+            digits_only = re.fullmatch(r"[-\d.,]*", text, re.ASCII)
+            code = "max_digits" if digits_only else "invalid"
+            raise ValidationError(self.error_messages[code], code=code)
         if not (_PLAIN_NUMBER.fullmatch(text) or _GROUPED_NUMBER.fullmatch(text)):
             raise ValidationError(self.error_messages["invalid"], code="invalid")
         return Decimal(text.replace(",", ""))
