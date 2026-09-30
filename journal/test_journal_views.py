@@ -414,6 +414,17 @@ def test_stop_help_survives_a_post_error_re_render(logged_in, user):
     assert "id_stop_price_helptext" in page.one("input", name="stop_price")["aria-describedby"]
 
 
+def test_typed_risk_fields_stay_open_when_another_field_errors(logged_in, user):
+    """Review PR 11: a typed stop hidden in a collapsed <details> while the page says "your
+    text is still here" contradicts itself; a note error must not collapse it."""
+    opening, _ = closed_trade(user, entry="50.00", exit="51.00")
+
+    resp = logged_in.post(url(opening.pk), {"stop_price": "49.50", "note": "n" * 10_001})
+
+    assert resp.status_code == 200 and resp.context["form"].has_error("note")
+    assert resp.context["risk_open"] is True
+
+
 def test_open_trade_status_line_is_visible_without_opening_the_risk_section(logged_in, user):
     """Review PR 11: R_STATUS_TRADE_OPEN sat inside the collapsed <details> and was never seen."""
     opening = fill(user, "buy", qty="1", price="10")

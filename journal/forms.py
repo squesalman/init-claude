@@ -148,7 +148,7 @@ class PlainDecimalField(forms.DecimalField):
         if not text:
             return None
         if len(text) > _MAX_NUMBER_CHARS:  # no number regex on megabytes (ReDoS)
-            digits_only = re.fullmatch(r"[-.,]*\d[-\d.,]*", text, re.ASCII)
+            digits_only = re.fullmatch(r"[-.,]*\d[-\d.,]*", text[: _MAX_NUMBER_CHARS + 1], re.ASCII)
             code = "max_digits" if digits_only else "invalid"
             raise ValidationError(self.error_messages[code], code=code)
         if not (_PLAIN_NUMBER.fullmatch(text) or _GROUPED_NUMBER.fullmatch(text)):

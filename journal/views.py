@@ -905,7 +905,8 @@ def _journal_page(request, trade, form, saved, *, page_notice=None, **rules):
         "form": form,
         **_rules_context(request.user, next_url=journal_url, **rules),
         "risk_open": multi_leg or saved["has_risk"]
-        or form.has_error("stop_price") or form.has_error("planned_risk_amount"),
+        or form.has_error("stop_price") or form.has_error("planned_risk_amount")
+        or any(v is not None and str(v).strip() for v in risk_values),
         "risk_currency": trade.currency,
         "both_set": all(v is not None and str(v).strip() for v in risk_values),
         "r_status": saved["r_status"],

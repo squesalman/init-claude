@@ -167,7 +167,7 @@ def test_not_a_number(text):
     assert error({"stop_price": text}, "stop_price").message == copy.STOP_NOT_NUMBER
 
 
-@pytest.mark.parametrize("text", ["1" * 41, "1" * 5000 + "x", "," * 41])
+@pytest.mark.parametrize("text", ["1" * 41, "1" * 5000, "x" + "1" * 5000, "," * 41])
 def test_overlong_input_is_rejected_before_any_number_regex_runs(text):
     """Security review: a regex on megabytes of digits is a ReDoS. The length cap (longest
     valid value is ~30 chars) makes this deterministic, not a timing test. Digits-only
