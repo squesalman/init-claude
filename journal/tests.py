@@ -315,6 +315,37 @@ def test_journalentry_risk_currency_blank_rejected_when_amount_set():
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("amount", ["0", "-1.00"])
+def test_journalentry_planned_risk_nonpositive_rejected(amount):
+    """ADR-0007 / follow-ups row 14: journalentry_planned_risk_positive."""
+    user = User.objects.create_user(email="p@example.com", password="x")
+    execution = _make_execution(user)
+
+    with pytest.raises(IntegrityError, match="journalentry_planned_risk_positive"):
+        with transaction.atomic():
+            JournalEntry.objects.create(
+                user=user,
+                opening_execution=execution,
+                planned_risk_amount=amount,
+                risk_currency="USD",
+            )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("amount", [None, "0.0001", "100.00"])
+def test_journalentry_planned_risk_null_or_positive_accepted(amount):
+    user = User.objects.create_user(email="q@example.com", password="x")
+    execution = _make_execution(user)
+
+    JournalEntry.objects.create(
+        user=user,
+        opening_execution=execution,
+        planned_risk_amount=amount,
+        risk_currency=None if amount is None else "USD",
+    )
+
+
+@pytest.mark.django_db
 def test_execution_currency_blank_rejected():
     """
     Round-5 code review: currency had no non-empty guard at all — no CheckConstraint,
