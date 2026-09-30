@@ -37,8 +37,8 @@
     {% include "partials/field.html" with field=form.planned_risk_amount %}
     <p id="risk-currency">{{ risk_currency }}</p>
     {% if both_set %}<p>{{ copy.RISK_BOTH_SET }}</p>{% endif %}
-    {% if r_status %}<p>{{ r_status }}</p>{% endif %}
   </details>
+  {% if r_status %}<p>{{ r_status }}</p>{% endif %}
 
   <p>
     <button type="submit" class="btn-primary" data-busy="{{ copy.JOURNAL_SAVE_BUSY }}">{{ copy.JOURNAL_SAVE }}</button>

@@ -161,12 +161,12 @@ def test_not_a_number(text):
     assert error({"stop_price": text}, "stop_price").message == copy.STOP_NOT_NUMBER
 
 
-@pytest.mark.parametrize("text", ["1" * 41, "1" * 5000 + "x"])
+@pytest.mark.parametrize("text", ["1" * 41, "1" * 5000 + "x", "," * 41])
 def test_overlong_input_is_rejected_before_any_number_regex_runs(text):
     """Security review: a regex on megabytes of digits is a ReDoS. The length cap (longest
     valid value is ~30 chars) makes this deterministic, not a timing test. Digits-only
     overlong input reads "too large"; anything else "not a number"."""
-    expected = copy.NUMBER_TOO_LARGE if text.isdigit() else None
+    expected = copy.NUMBER_TOO_LARGE if text.isdigit() else None  # only-separators: not a number
     for field, not_number in (("planned_risk_amount", copy.RISK_NOT_NUMBER),
                               ("stop_price", copy.STOP_NOT_NUMBER)):
         assert error({field: text}, field).message == (expected or not_number)

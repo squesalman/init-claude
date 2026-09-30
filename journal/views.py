@@ -900,16 +900,18 @@ def _journal_page(request, trade, form, saved, *, page_notice=None, **rules):
     side_help = import_copy.STOP_HELP_LONG if trade.direction == "long" else (
         import_copy.STOP_HELP_SHORT
     )
-    risk_values = [form[name].value() for name in ("stop_price", "planned_risk_amount")]
     journal_url = reverse("trade_journal", args=[trade.opening_execution_id])
     stop_help = import_copy.STOP_HELP_MULTI_LEG if multi_leg else side_help.format(
         entry=display.price(trade.avg_entry_price)
     )
-    risk_help = import_copy.RISK_HELP.format(currency=trade.currency)
     # Per-trade help on the fields themselves, so the rendered input's aria-describedby
-    # points at it (design 3.5, 8).
+    # points at it (design 3.5, 8). Set BEFORE the first form[name]: a BoundField snapshots
+    # help_text when it is first built and cached.
     form.fields["stop_price"].help_text = stop_help
-    form.fields["planned_risk_amount"].help_text = risk_help
+    form.fields["planned_risk_amount"].help_text = import_copy.RISK_HELP.format(
+        currency=trade.currency
+    )
+    risk_values = [form[name].value() for name in ("stop_price", "planned_risk_amount")]
     context = {
         "title": import_copy.JOURNAL_TITLE.format(symbol=trade.symbol),
         "trade": _trade_summary(trade),
@@ -917,10 +919,7 @@ def _journal_page(request, trade, form, saved, *, page_notice=None, **rules):
         **_rules_context(request.user, next_url=journal_url, **rules),
         "risk_open": multi_leg or saved["has_risk"]
         or form.has_error("stop_price") or form.has_error("planned_risk_amount"),
-        "multi_leg": multi_leg,
-        "stop_help": stop_help,
         "risk_currency": trade.currency,
-        "risk_help": risk_help,
         "both_set": all(v is not None and str(v).strip() for v in risk_values),
         "r_status": saved["r_status"],
         "notice": page_notice,

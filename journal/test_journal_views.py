@@ -5,6 +5,7 @@ docs/design/journaling.md 3-6, 12 (copy). Synthetic data only.
 """
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from itertools import count
@@ -375,23 +376,39 @@ def test_multi_leg_stop_saves_unchecked_with_the_hint_and_the_status_line(logged
 
     page = logged_in.get(url(opening.pk))
     c = page.context
-    assert c["multi_leg"] and c["stop_help"] == copy.STOP_HELP_MULTI_LEG
+    assert copy.STOP_HELP_MULTI_LEG in Doc(body(page)).text  # rendered, not just in context
     assert c["r_status"] == copy.R_STATUS_STOP_MULTI_LEG
     assert c["trade"]["entries"] == copy.TRADE_ENTRIES.format(n=2)
 
 
 def test_stop_help_names_the_side_and_the_entry(logged_in, user):
+    """Review PR 11: the help must be in the rendered HTML and wired to the inputs; a context
+    key the template never renders (or a BoundField cached before help_text was set) hid it."""
     long_open, _ = closed_trade(user, entry="19850.25", exit="19862.00")
     short_open, _ = closed_trade(user, entry="80.30", exit="80.15", side="sell", symbol="CLZ6")
 
-    assert logged_in.get(url(long_open.pk)).context["stop_help"] == copy.STOP_HELP_LONG.format(
-        entry="19,850.25"
+    long_page = Doc(body(logged_in.get(url(long_open.pk))))
+    assert copy.STOP_HELP_LONG.format(entry="19,850.25") in long_page.text
+    assert copy.RISK_HELP.format(currency="USD") in long_page.text
+    assert "id_stop_price_helptext" in long_page.one("input", name="stop_price")["aria-describedby"]
+    assert "id_planned_risk_amount_helptext" in (
+        long_page.one("input", name="planned_risk_amount")["aria-describedby"]
     )
-    assert logged_in.get(url(short_open.pk)).context["stop_help"] == (
-        copy.STOP_HELP_SHORT.format(entry="80.30")
-    )
+    short_page = Doc(body(logged_in.get(url(short_open.pk))))
+    assert copy.STOP_HELP_SHORT.format(entry="80.30") in short_page.text
     c = logged_in.get(url(long_open.pk)).context
-    assert (c["multi_leg"], c["trade"]["entries"], c["risk_currency"]) == (False, None, "USD")
+    assert (c["trade"]["entries"], c["risk_currency"]) == (None, "USD")
+
+
+def test_open_trade_status_line_is_visible_without_opening_the_risk_section(logged_in, user):
+    """Review PR 11: R_STATUS_TRADE_OPEN sat inside the collapsed <details> and was never seen."""
+    opening = fill(user, "buy", qty="1", price="10")
+
+    html_ = body(logged_in.get(url(opening.pk)))
+    inside = re.search(r'<details id="risk-details".*?</details>', html_, re.S).group(0)
+
+    assert copy.R_STATUS_TRADE_OPEN in Doc(html_).text
+    assert copy.R_STATUS_TRADE_OPEN not in inside
 
 
 def test_open_trade_can_be_journaled_and_says_so(logged_in, user):
