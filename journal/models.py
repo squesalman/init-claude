@@ -441,8 +441,6 @@ class Execution(UserOwned):
                 name="execution_contract_multiplier_positive",
             ),
             # Strict ISO 4217 shape ("usd"/"us"/"" rejected); pairs with the field validator.
-            # Also the non-blank guard (follow-ups row 11: execution_currency_not_blank
-            # was redundant with this and was dropped).
             models.CheckConstraint(
                 condition=models.Q(currency__regex=CURRENCY_CODE_REGEX),
                 name="execution_currency_iso_format",
@@ -524,16 +522,10 @@ class JournalEntry(UserOwned):
 
     class Meta(UserOwned.Meta):
         constraints = [
-            # "required iff set": non-blank-ness is enforced by the ISO-format CHECK
-            # below (follow-ups row 11), so this one only pairs null with null.
+            # "required iff set": both columns null, or both set.
             models.CheckConstraint(
-                condition=(
-                    models.Q(planned_risk_amount__isnull=True, risk_currency__isnull=True)
-                    | (
-                        models.Q(planned_risk_amount__isnull=False)
-                        & models.Q(risk_currency__isnull=False)
-                    )
-                ),
+                condition=models.Q(planned_risk_amount__isnull=True, risk_currency__isnull=True)
+                | models.Q(planned_risk_amount__isnull=False, risk_currency__isnull=False),
                 name="journalentry_risk_currency_required_with_amount",
             ),
             models.CheckConstraint(
@@ -548,6 +540,7 @@ class JournalEntry(UserOwned):
                 condition=models.Q(planned_risk_amount__isnull=True)
                 | models.Q(planned_risk_amount__gt=0),
                 name="journalentry_planned_risk_positive",
+                violation_error_message="Planned risk must be greater than zero.",
             ),
         ]
         indexes = [

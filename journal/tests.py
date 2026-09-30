@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
 from django.db.models.deletion import RestrictedError
 from django.test.utils import CaptureQueriesContext
@@ -295,7 +296,7 @@ def test_execution_price_zero_rejected():
 
 
 @pytest.mark.django_db
-def test_journalentry_risk_currency_blank_rejected_when_amount_set():
+def test_journalentry_blank_risk_currency_rejected_by_iso_format():
     """
     Round-5 code review: the CHECK constraint only tested risk_currency__isnull, so
     risk_currency="" satisfied "required iff planned_risk_amount is set" despite being
@@ -304,7 +305,7 @@ def test_journalentry_risk_currency_blank_rejected_when_amount_set():
     user = User.objects.create_user(email="r@example.com", password="x")
     execution = _make_execution(user)
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(IntegrityError, match="journalentry_risk_currency_iso_format"):
         with transaction.atomic():
             JournalEntry.objects.create(
                 user=user,
@@ -332,6 +333,27 @@ def test_journalentry_planned_risk_nonpositive_rejected(amount):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("amount", ["0", "0.00001"])
+def test_journalentry_full_clean_rejects_unstorable_risk_with_field_message(amount):
+    """Sub-0.0001 risk would round to 0 in NUMERIC(19,4) and 500 at save(); the model
+    layer must reject it first. J2's form must not quantize before validating."""
+    user = User.objects.create_user(email="v@example.com", password="x")
+    entry = JournalEntry(
+        user=user,
+        opening_execution=_make_execution(user),
+        planned_risk_amount=Decimal(amount),
+        risk_currency="USD",
+    )
+
+    with pytest.raises(ValidationError) as exc:
+        entry.full_clean()
+
+    assert "planned_risk_amount" in exc.value.message_dict or (
+        "Planned risk must be greater than zero." in exc.value.messages
+    )
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("amount", [None, "0.0001", "100.00"])
 def test_journalentry_planned_risk_null_or_positive_accepted(amount):
     user = User.objects.create_user(email="q@example.com", password="x")
@@ -346,7 +368,7 @@ def test_journalentry_planned_risk_null_or_positive_accepted(amount):
 
 
 @pytest.mark.django_db
-def test_execution_currency_blank_rejected():
+def test_execution_blank_currency_rejected_by_iso_format():
     """
     Round-5 code review: currency had no non-empty guard at all — no CheckConstraint,
     no full_clean() call site — unlike quantity/price/contract_multiplier in the same
@@ -354,7 +376,7 @@ def test_execution_currency_blank_rejected():
     """
     user = User.objects.create_user(email="s@example.com", password="x")
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(IntegrityError, match="execution_currency_iso_format"):
         with transaction.atomic():
             Execution.objects.create(
                 user=user,
