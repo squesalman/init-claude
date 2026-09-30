@@ -2,7 +2,7 @@
 
 A web app where retail traders log trades, journal their reasoning and emotions, and get evidence-backed insights into *behavioral* patterns (revenge trading, overtrading, tilt, rule-breaking) — not just P&L stats.
 
-**Status:** building the MVP. Stack chosen (ADR-0002); schema, tenant-isolation tripwire and Topstep dedupe migration are merged. Signup/login/logout and the styled shell exist (PR #4), plus ruff lint (PR #5). The Topstep importer, FIFO matcher, stats and `no-store` middleware are merged (PR #6). The import UI read side — upload, `/imports/` list, import detail, vendored htmx + Alpine — is merged (PR #7 / PR C1). Delete-import (PR C2) and the `/trades/` list with stat cards (PR D) are merged (PR #8). Import-delete hardening (PR #9) is merged too. Next: the slice-1 end-to-end check with the real CSV, then the journaling spec (`docs/product/features/mvp.md` stories 4-5); open follow-ups are `docs/data/follow-ups.md` rows 31-37; see `docs/plan.md`.
+**Status:** building the MVP. Slice 1 (Topstep import, `/trades/` list, stat cards, delete-import) is merged through PR #9. Journaling is specced and designed (ADR-0007 Accepted); building J1 (CHECK migration, PR #10) -> J2 (backend) -> J3 (frontend). Current state and open follow-ups (`docs/data/follow-ups.md`): `docs/plan.md`. Keep this line short; PR history lives in the plan.
 
 **Read `docs/README.md` first.** It indexes every doc with owner and status. Found two docs that disagree? Stop, report it, and don't pick a side.
 
@@ -20,6 +20,7 @@ Python 3.12 · Django 5.2 LTS · Postgres 16+ · Django ORM · `django-ninja` (J
 
 - Dev: `docker compose up -d` (Postgres only; the app runs on the host via `uv run --env-file .env manage.py runserver`). Copy `.env.example` to `.env` first: settings fail closed without `DJANGO_SECRET_KEY`, so every `uv run` (manage.py, pytest) needs `--env-file .env`.
 - Lint: `uv run ruff check .` (ruff in the `dev` group; lint only, no `ruff format`).
+- Test: `uv run --env-file .env pytest -q` (~4 min; run in the background).
 - Prod: Docker Compose (web + db + caddy) on a rented VPS; deploy with `git pull && docker compose -f compose.prod.yaml up -d --build`; `pg_dump` on cron to off-box storage from day one.
 - Money: `NUMERIC(19,4)` + ISO 4217 currency column. Prices/quantities: `NUMERIC(20,10)`. `Decimal` end to end, never floats. Round explicitly at computation, never at display.
 - No background worker; metrics computed on read. No SPA, no Redis/Celery, no pandas.
@@ -85,6 +86,7 @@ Workers never push to `main` or merge their own branch. Once a worker's task is 
 - Commit doc-agent output to `main` before creating a code worktree, so the worktree branches from current docs.
 - An ADR cannot be marked Accepted while any `[GUESS]` in it is open. Resolve it against `docs/domain/` first.
 - Independent tasks run in parallel; dependent ones run in sequence.
+- Call the `advisor` tool before committing to an approach on a new feature or ADR, when stuck, and before declaring a PR or slice done. Weigh its advice; if it conflicts with evidence you already have, reconcile in one more call instead of silently switching.
 - Don't spin up agents for trivial edits — do those directly.
 
 ## Working conventions
