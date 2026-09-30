@@ -21,18 +21,21 @@ Statuses: **Accepted** (build from it) · **Draft** (don't build from it yet) ·
 | [features/mvp](product/features/mvp.md) | Accepted (open questions all answered) | MVP scope, user stories 1-6, non-goals. |
 | [features/import-account-label](product/features/import-account-label.md) | Accepted | Optional Account field on upload, conflict banner, acceptance criteria. |
 | [features/import-and-list](product/features/import-and-list.md) | Accepted (rulings applied 2026-09-26) | Slice 1: signup/login, `/trades/`, 3 stat cards, isolation test. 25 acceptance criteria. |
+| [features/journaling](product/features/journaling.md) | Ready to build (decisions 1-8 recorded 2026-09-30) | MVP stories 4-5: journal entry per trade, "My rules", Avg R lighting up. 34 acceptance criteria. |
 
 ## Domain (`docs/domain/`, owner: `trading-domain-expert`)
 | Doc | Status | Answers |
 |---|---|---|
 | [pnl-and-matching](domain/pnl-and-matching.md) | Accepted | Fill→trade matching, P&L, win rate, R-multiple, test vectors. |
 | [topstep-import](domain/topstep-import.md) | Accepted | Real TopstepX CSV format, column mapping, multipliers, fees, dedupe, test vectors. |
+| (updated 2026-09-30) [pnl-and-matching](domain/pnl-and-matching.md) §3 | Accepted | Journaling rulings: `risk_not_positive`, stop side-check (single-entry only), derived `risk_currency`, Avg R / "Left out" counting, vectors 18-23. |
 
 ## Design (`docs/design/`, owner: `ux-designer`)
 | Doc | Status | Answers |
 |---|---|---|
 | [import-account-label](design/import-account-label.md) | Accepted | Upload page, conflict banner, `/imports/` list + detail, delete flow, final copy. |
 | [auth-and-trades-list](design/auth-and-trades-list.md) | Accepted (rulings applied 2026-09-26; single source for layout and copy) | Shell/nav, signup, login, `/trades/`, empty states, stat cards. |
+| [journaling](design/journaling.md) | Accepted (owner rulings 2026-09-30: My rules collapsed, stay on page after save) | Journal page, Journal column on `/trades/`, Avg R card states, delete-dialog consistency, finished copy table. |
 
 
 ## Plan

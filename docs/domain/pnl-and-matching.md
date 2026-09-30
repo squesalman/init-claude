@@ -229,6 +229,31 @@ arithmetic mean of those stored values, quantized once to 2 dp. Do not average d
 | Multi-leg, stop only | null | `stop_price_multi_leg` |
 | Neither input | null | `no_risk_input` |
 
+- **Reason codes are exactly the strings in the table above** (ruling 2026-09-30): the code for
+  `planned_risk_amount <= 0` is `risk_not_positive`. `planned_risk_not_positive` (used once in
+  `docs/data/follow-ups.md` row 14) is a typo and must not appear in code.
+- **Evaluation order** (first hit wins, so each trade has exactly one reason): `trade_open` ->
+  planned risk set? (`risk_not_positive`, then `risk_currency_mismatch`, else valid) -> stop set?
+  (multi-leg: `stop_price_multi_leg`; single-entry: `stop_not_a_risk` or valid) -> `no_risk_input`.
+- **Stop side-check applies to single-entry trades only** (ruling 2026-09-30). "Single-entry" is
+  by entry lots (Terms above), so a trade with one entry lot and any number of partial exits is
+  single-entry: `entry_price` is that lot's price and the check is
+  `(entry_price - stop_price) * side_sign > 0`, violation gives `stop_not_a_risk`. A flip's
+  leftover lot counts as one lot at the execution's price. For a **multi-leg** trade the stop is
+  never used for R, so no side-check is defined: there is no single entry price to compare to, an
+  average entry would invent one, and a stop set before a later scale-in may legitimately sit
+  above a later entry. The result is `stop_price_multi_leg` even when the stop looks like it is
+  on the profit side (`stop_not_a_risk` is never returned for multi-leg). The form may accept and
+  store such a stop unchecked. A stop is also never checked when `planned_risk_amount` is set
+  (planned wins, the stop is inert).
+- **`risk_currency` is derived, not typed** (ruling 2026-09-30). On save, when
+  `planned_risk_amount` is set the app sets `risk_currency` = the trade's currency (one
+  currency per trade, from its executions); when the amount is blank both are cleared, which
+  satisfies the DB CHECK. Any ISO currency works: a EUR trade with planned risk 40.00 stores
+  `risk_currency = EUR`, and R is computed in the EUR group with no FX. The amount is read as
+  "in the trade's currency". Nothing is special about non-USD. A mismatch can therefore only arise
+  later (a re-import changes the trade's currency) or from legacy rows, and then the rule below
+  applies.
 - **Currency mismatch:** no FX conversion (ADR-0002). `risk_currency` compared to the trade
   currency, case-sensitive ISO codes. A mismatch gives `R = null`. **No fallback to `stop_price`
   when `planned_risk_amount` is set but unusable** (mismatch or not positive). A silent fallback
@@ -247,6 +272,14 @@ arithmetic mean of those stored values, quantized once to 2 dp. Do not average d
 - **Average R** = mean of stored `R` over closed trades in the current filtered set where
   `R is not null`. Display `avg R: 1.40 (n=32)`, where `n` counts trades with non-null R (mvp.md
   story 6). Trades with null R are excluded, never counted as 0.
+  **Which trades count** (ruling 2026-09-30): within one currency group (no FX), only **closed**
+  trades whose R is non-null (valid risk, positive, R computed). Open trades are in neither `n`
+  nor "Left out". **"Left out: N"** = closed trades in the same group with `R = null`, for any
+  reason (`no_risk_input`, `risk_not_positive`, `risk_currency_mismatch`, `stop_not_a_risk`,
+  `stop_price_multi_leg`). So `n + N = closed trades in the group`. Missing or unusable risk is
+  never treated as 0 (that would drag the mean toward 0 and fabricate a result). If `n = 0`
+  show `— (n=0)`, never `0.00`. Rounding: mean of the stored 4 dp R values, quantized once to
+  2 dp with `ROUND_HALF_EVEN` (exact ties round to the even digit, see Vector 23).
 - **Which imported trades get R:** every Topstep row is one trade with one entry lot (ADR-0004 §3,
   bucketed by `broker_trade_id`), so both inputs work on Topstep imports. Multi-leg trades come
   only from merged FIFO, which means executions with `broker_trade_id = NULL` (manual entries that
@@ -389,6 +422,44 @@ expected = {"r_multiple": None, "r_reason": "trade_open"}
 
 # Vector 17: average R over a filtered set: R values [2.3600, null, -1.0400, 2.0000]
 expected = {"avg_r": "1.11", "n": 3}   # (2.36 - 1.04 + 2.00) / 3 = 1.1067 -> 1.11
+
+# Vector 18: single-entry with partial exits: stop check uses the one entry lot (§3)
+# Long 100 @ 50.00, stop 49.50. Sell 40 @ 51.00, sell 60 @ 50.60. Fees 2.00 total. USD.
+trade = {"side": "long", "entry_lots": [{"price": "50.00", "qty": 100}], "multiplier": "1",
+         "currency": "USD", "net_pnl": "74.00",   # 40*1.00 + 60*0.60 = 76.00, minus 2.00
+         "journal": {"stop_price": "49.50", "planned_risk_amount": None, "risk_currency": None}}
+expected = {"risk_amount": "50.00", "r_multiple": "1.4800", "r_reason": None}   # 74/50
+
+# Vector 19: multi-leg, stop only, stop on the "profit side" of both entries -> still
+# stop_price_multi_leg, never stop_not_a_risk (Vector 10 trade, net 69.00)
+journal = {"stop_price": "11.00", "planned_risk_amount": None, "risk_currency": None}
+expected = {"r_multiple": None, "r_reason": "stop_price_multi_leg"}
+
+# Vector 20: multi-leg, both set, stop unusable -> planned wins, stop ignored, no check
+journal = {"stop_price": "11.00", "planned_risk_amount": "30.00", "risk_currency": "USD"}
+expected = {"risk_amount": "30.00", "r_multiple": "2.3000", "r_reason": None}
+
+# Vector 21: risk_currency derivation on save (non-USD trade). Trade currency EUR.
+save_input = {"planned_risk_amount": "40.00"}            # no currency field on the form
+expected_stored = {"planned_risk_amount": "40.00", "risk_currency": "EUR"}
+save_input = {"planned_risk_amount": None}               # cleared
+expected_stored = {"planned_risk_amount": None, "risk_currency": None}
+
+# Vector 22: stored currency no longer matches the trade (re-import changed it to EUR)
+journal = {"stop_price": None, "planned_risk_amount": "59.00", "risk_currency": "USD"}
+trade_currency = "EUR"
+expected = {"r_multiple": None, "r_reason": "risk_currency_mismatch"}
+
+# Vector 23: Avg R with 4 closed trades in one group, 2 with risk (hand-computed)
+#   T1 net 20.00, planned 100.00 USD -> R = 0.2000
+#   T2 net  5.00, planned 100.00 USD -> R = 0.0500
+#   T3 closed, no risk input          -> null (no_risk_input)
+#   T4 closed, no risk input          -> null (no_risk_input)
+# mean = (0.2000 + 0.0500) / 2 = 0.1250 exact tie at 2 dp -> ROUND_HALF_EVEN -> 0.12
+# (ROUND_HALF_UP would give 0.13: an implementation using it fails this vector.)
+# T3/T4 are NOT counted as 0: counting them would give 0.0625 -> 0.06.
+expected = {"avg_r": "0.12", "n": 2, "left_out": 2}
+# Add an open trade T5 with planned risk 100.00 USD: expected unchanged (open is in neither n nor left_out).
 ```
 
 ## 6. Open items (need verification, flagged rather than guessed)

@@ -43,7 +43,7 @@ POST (multipart) -> sync parse -> 302 to Import detail (/imports/<id>/)
           +- journal entries ...... step 1: read the list
                                     step 2: tick "Also delete my N journal entries ..."
                                             (button enables) -> Delete
-          +- server: stale count -> nothing deleted, dialog re-shown with fresh list
+          +- server: stale (newest-entry guard, see 3.3) -> nothing deleted, dialog re-shown with fresh list
           v
        302 /imports/ + flash ("Import deleted...")
           v
@@ -233,8 +233,9 @@ Three variants, chosen server-side from ADR-0005 §5 inputs.
 | |   (no written note)                                  | |
 | |   View trade (opens in a new tab)                    | |
 | +------------------------------------------------------+ |
-| Want to keep any of your writing? Copy it from the list  |
-| or open the trade first.                                 |
+| Want to keep any of your writing? Copy it from the list, |
+| or use View trade to open that trade's journal in a new  |
+| tab.  (helper text replaced 2026-09-30)                  |
 |                                                          |
 | [ ] Also delete my 3 journal entries (2 with written     |
 |     notes). This can't be undone.                        |
@@ -256,14 +257,14 @@ Three variants, chosen server-side from ADR-0005 §5 inputs.
 Common rules:
 
 - **"Original batch" line (ADR-0005 accepted surprise).** If the same file (same hash) was uploaded again later and that later upload imported nothing, add above "This can't be undone": "You uploaded this file again on Sep 27, but that upload added nothing new, so these trades exist only through this import. Deleting it removes them." Shown in variants 1 and 2 only.
-- **Journal list:** per entry, symbol, opened-at (user tz), the rules-followed answer as icon plus words ("followed", "not followed", "not answered"), first ~80 characters of the note (or "no written note"), and a "View trade" link that opens in a new tab so the dialog and the tick box are not lost. Scroll container `max-height: 40vh`, `tabindex="0"`, `role="region"`, `aria-label="Journal entries that will be deleted"`. First 20 entries render, then a "Show all {N}" button (htmx) if N > 20, so the user can copy any note.
+- **Journal list:** per entry, symbol, opened-at (user tz), the rules-followed answer as icon plus words ("followed", "not followed", "not answered"), the **full note** (or "no written note"; changed 2026-09-30, per PR #8, was ~80 characters), a muted line "Has a stop or planned risk amount." when the entry has either (added 2026-09-30, `journaling.md` section 7), and a "View trade" link, now live, to `/trades/<id>/journal/`, that opens in a new tab so the dialog and the tick box are not lost. Scroll container `max-height: 40vh`, `tabindex="0"`, `role="region"`, `aria-label="Journal entries that will be deleted"`. First 20 entries render, then a "Show all {N}" button (htmx) if N > 20, so the user can copy any note.
 - **Singular and plural:** "1 trade", "1 journal entry (1 with a written note)". If M = 0: "(none with written notes)". Never "0 with notes" in the body sentence; the list still shows "no written note" per entry.
 - **Button labels:** Cancel / **Delete import** (variants 1 and 3) / **Delete import and entries** (variant 2). Delete is an outline button in the danger token plus the words, never a filled red slab. The tick box is not styled as an alarm; it uses the normal text color.
 - **Focus on open:** variant 1 and 3 focus **Cancel**. Variant 2 focuses the dialog title (`tabindex="-1"`) so a screen reader starts reading at the top. Never focus Delete.
 - **Loading:** body shows a 3-line skeleton while `hx-get` runs. The dialog does not open until the body arrives, unless it takes over 300 ms, then it opens with the skeleton and `aria-busy="true"`.
 - **Submitting:** `hx-post` carries the CSRF token, the journal count the user was shown, and the tick box value. Button reads "Deleting..." and is disabled. Success: `HX-Redirect` to `/imports/`.
 - **Server refused, box not ticked** (JS off, or tampered): dialog re-renders with the inline message "Tick the box to confirm. Nothing was deleted." above the checkbox, checkbox focused.
-- **Stale count** (the user journaled more trades in another tab; server rolled back): dialog re-renders in place with a notice at the top, `role="status"`: "Your journal changed while this was open, so nothing was deleted. The list below is up to date." The box is **unticked** and the new N and M are shown. Focus moves to that notice. The user has to read the new list and tick again.
+- **Stale count** (updated 2026-09-30: the server guard compares the newest journal entry (max pk) it showed with the current one, so it fires when the user journaled more trades in another tab **and** when a new entry replaced a deleted one, even if the count is unchanged; server rolled back): dialog re-renders in place with a notice at the top, `role="status"`: "Your journal changed while this was open, so nothing was deleted. The list below is up to date." The box is **unticked** and the new N and M are shown. Focus moves to that notice. The user has to read the new list and tick again.
 - **Server or network failure:** the dialog stays open with "Something went wrong and nothing was deleted. Try again in a moment." Buttons re-enabled. Variant 2: the tick stays as the user left it.
 - **Batch already gone** (double click, other tab): redirect to `/imports/` with flash "That import was already deleted." Not an error.
 - **Not owner:** 404, same response as a missing id (isolation).
@@ -419,7 +420,7 @@ Mobile (360px): each row becomes a card. Line 1: filename (link) and the actions
 | Ready, two-step, box unticked | Variant 2, Delete disabled, focus on title. |
 | Ready, two-step, box ticked | Delete enabled. Live region says "Delete button is now available". Unticking disables it again and says "Delete button is not available". |
 | Submitting | "Deleting..." disabled, Cancel disabled. |
-| Stale count | Notice on top, new list, box unticked (see 3.3). |
+| Stale (newest-entry guard, 2026-09-30) | Notice on top, new list, box unticked (see 3.3). |
 | Failed | Inline message, dialog stays open, nothing was deleted. |
 | Already gone | Redirect with flash. |
 
@@ -456,9 +457,10 @@ Tone: say what happened, say what is or is not lost, say the next step. Never "e
 | Body, variant 1 | This removes the {n} trades that came from this file, and the upload record (including {k} rows that were skipped or could not be read). Your other imports stay as they are. |
 | Body, variant 1, k = 0 | This removes the {n} trades that came from this file, and the upload record. Your other imports stay as they are. |
 | Body, variant 2 lead | This removes the {n} trades that came from this file, and the upload record. Your other imports stay as they are. |
-| Body, variant 2 journal | You've journaled {N} of these trades ({M} with written notes). Deleting the import deletes those journal entries too. |
+| Body, variant 2 journal (replaced 2026-09-30) | You've journaled {N} of these trades ({M} with written notes). Deleting the import deletes those journal entries too, along with any stop or planned risk on them. (N = 1: "1 of these trades ... deletes that journal entry too, along with any stop or planned risk on it.") |
 | List heading | Journal entries that will be deleted |
-| List helper | Want to keep any of your writing? Copy it from the list or open the trade first. |
+| List helper (replaced 2026-09-30) | Want to keep any of your writing? Copy it from the list, or use View trade to open that trade's journal in a new tab. |
+| List row, has risk (added 2026-09-30) | Has a stop or planned risk amount. |
 | List row, no note | (no written note) |
 | Rules answers | followed / not followed / not answered |
 | Checkbox | Also delete my {N} journal entries ({M} with written notes). This can't be undone. (N = 1: "my 1 journal entry (1 with a written note)". M = 0: "(none with written notes)") |
@@ -549,10 +551,10 @@ No JS: the button is enabled, and the server rejects an unticked submit with the
 9. **Conflict banner when the user has only one account** (for example a re-exported file with an adjusted price): the "usually" wording covers it.
 10. **Zero-row or header-only file**: handled by the file-level message in section 4, not the banner.
 11. **Journaled trades in the batch**: two-step confirm (3.3 variant 2). Deleting also removes those journal entries. No undo.
-12. **Journal changed while the dialog was open** (another tab): server rolls back, dialog re-shows with fresh list and an unticked box (3.3 stale count). Nothing is lost silently.
+12. **Journal changed while the dialog was open** (another tab; updated 2026-09-30: the newest-entry (max pk) guard also catches a new entry replacing a deleted one at the same count): server rolls back, dialog re-shows with fresh list and an unticked box (3.3 stale count). Nothing is lost silently.
 13. **Deleting the original batch when a later re-upload of the same file exists**: the trades go, even though the re-upload is still listed. That re-upload imported nothing, so the original's dialog carries the "original-batch line". Deleting the re-upload (variant 3) only removes its record.
 14. **Batch with zero imported trades** (all skipped or failed): variant 3, "Your trades are not affected".
-15. **Very many journal entries** (dozens): list scrolls in its 40vh region, first 20 shown, "Show all". Note snippets are cut at ~80 characters, so full notes are read on the trade page (link opens in a new tab).
+15. **Very many journal entries** (dozens): list scrolls in its 40vh region, first 20 shown, "Show all". Notes are shown in full (changed 2026-09-30, per PR #8; no ~80-character cut), so any note can be copied from the list.
 16. **Journal entries with no written note** (only a rules answer): counted in N, shown as "(no written note)", not counted in M.
 17. **Deleting the only import**: empty state in 3.4 case B.
 18. **Back button after delete**: `/imports/<deleted id>/` redirects with a flash (3.4). The confirm URL for a deleted batch does the same.

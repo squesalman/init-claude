@@ -248,6 +248,7 @@ Column spec (build this; the sketch shows shape only):
 | 8 | Result | Icon + word: **Win**, **Loss**, **Breakeven**, **Open**. Definitions from domain §2: breakeven is `net_pnl == 0` exactly. | left | no |
 | 9 | Net P&L | Stored net P&L after fees, USD, explicit sign, `$`, thousands separator, 2 decimals: `+$23.50`, `-$150.00`, `$0.00` (same formatter as the Total P&L card; PM wording). Open trades: the word "Open". | right | yes |
 | 10 | Account | Label, or "no name" for a blank label. Column present only under decision 11. | left | no |
+| 11 | Journal (added 2026-09-30) | One link per row: state label ("Add journal", "Followed rules", ...) to the trade's journal page. Last column, after Account when shown. Spec: `journaling.md` section 5. | left | no |
 
 Formatting rules:
 - Numbers use `font-variant-numeric: tabular-nums`. Prices and quantities are shown at up to 4 decimals with trailing zeros trimmed to a minimum of 2 for prices. This is a display filter only; no value is computed from a displayed string.
@@ -255,7 +256,7 @@ Formatting rules:
 - Header sort links: each sortable `<th>` has `aria-sort="ascending|descending|none"` and contains a link whose text is the column name plus an arrow glyph on the active column, with visually hidden text "sorted newest first" (or "oldest first", "highest first", "lowest first", "A to Z", "Z to A"). Clicking the active column flips direction.
 - Sort URL: `?sort=opened|symbol|pnl&dir=asc|desc`. Unknown values fall back to the default without an error. Ties: opened time descending, then a stable id. **Open trades sort last for `pnl` in both directions.**
 - No page controls and no "Showing a-b of n" footer. Sticky header keeps the columns visible while scrolling 177 rows.
-- Trade rows are **not links** in this slice: a trade's identity is derived and can shift (ADR-0003), and there is no trade page yet. Do not fake a link.
+- ~~Trade rows are not links in this slice.~~ **Changed 2026-09-30:** rows still are not links, but each row now has one journal link in a new last column "Journal" (row 11 above), to `/trades/<opening_execution_id>/journal/`. Layout, state labels and copy: [`journaling.md`](journaling.md) section 5.
 - `<table>` has `<caption class="sr-only">Your trades</caption>`, real `<th scope="col">`, sticky header on desktop.
 
 ### 5.2 Populated, mobile (under 640px)
@@ -384,7 +385,7 @@ Negative value uses the loss token plus the printed minus sign; positive uses th
 | Heading | Avg R |
 | Value line, no data | `— (n=0)` (never `0`, `0.00` or `NaN`) |
 | Value line, populated (later slice; build now) | `1.40 (n=32)` (mean of per-trade R where R is not null, 2 dp, domain §3; `n` = trades with non-null R) |
-| Help text, shown **only when n = 0** | Avg R shows your results in units of what you risked on each trade. It needs a stop or a planned risk amount on the trade, which you'll be able to add once trade journaling is available. Trades without one are left out, never counted as zero. |
+| Help text, shown **only when n = 0** | **Superseded 2026-09-30:** the wording, the n>0 "Left out: N" line and the card states now live in [`journaling.md`](journaling.md) section 6 (`AVG_R_HELP` in `accounts/copy.py`). The old text ("...once trade journaling is available") is stale. |
 | Screen-reader value | Avg R: not available, based on 0 trades |
 
 No date, no "coming soon", no advice, no link, no styling that reads as broken (same card frame, value in the normal text color, help text in the muted text token that still meets AA). The Win rate and Total P&L cards are unaffected. The card is built for both states now so the later slice does not touch it.
@@ -395,7 +396,7 @@ Summary text: How these are calculated. Body:
 
 - Win rate: wins divided by wins plus losses. Breakeven trades (exactly $0.00 after fees) are left out of both.
 - Total P&L: the sum of net P&L after fees for closed trades. Open trades are not included.
-- Avg R: the average of net P&L divided by the risk amount you set for each trade. Trades without a risk amount are left out.
+- Avg R: **superseded 2026-09-30**, see [`journaling.md`](journaling.md) section 6 for the text (`CALC_AVG_R` in `accounts/copy.py`).
 - Times are shown in {zone}. These numbers cover all your trades on all your accounts.
 
 Native `<details>`, keyboard operable, visible focus ring.
