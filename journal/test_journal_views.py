@@ -529,6 +529,23 @@ def test_no_js_rules_error_re_renders_the_journal_page_with_the_panel_open(logge
     assert "saved note" in Doc(body(resp)).text  # the journal form shows the saved entry
 
 
+def test_no_js_rules_database_error_shows_the_save_failed_notice(logged_in, user):
+    """Review PR 11: the rules notice must reach the panel on the no-JS journal page, not be
+    swallowed by the page's own notice parameter (which left an empty info box)."""
+    opening, _ = closed_trade(user)
+
+    with patch.object(User, "save", side_effect=DatabaseError("down")):
+        resp = logged_in.post(
+            "/rules/", {"trading_rules": "my rules text", "next": url(opening.pk)}
+        )
+
+    assert resp.status_code == 200
+    assert resp.context["rules_notice"] == copy.RULES_SAVE_FAILED
+    assert not resp.context["notice"]  # the journal's own notice stays empty
+    d = Doc(body(resp))
+    assert copy.RULES_SAVE_FAILED in d.text and "my rules text" in d.text
+
+
 def test_no_js_rules_error_for_someone_elses_trade_is_the_404(client, user, other):
     opening, _ = closed_trade(user)
     client.force_login(other)

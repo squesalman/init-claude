@@ -894,7 +894,7 @@ def _rules_context(user, rules_form=None, *, rules_open=False, status=None, noti
     }
 
 
-def _journal_page(request, trade, form, saved, *, notice=None, **rules):
+def _journal_page(request, trade, form, saved, *, page_notice=None, **rules):
     """ADR-0007 section 9 contract. Uses no query, so a failed save can re-render."""
     multi_leg = trade.entry_lot_count > 1
     side_help = import_copy.STOP_HELP_LONG if trade.direction == "long" else (
@@ -923,7 +923,7 @@ def _journal_page(request, trade, form, saved, *, notice=None, **rules):
         "risk_help": risk_help,
         "both_set": all(v is not None and str(v).strip() for v in risk_values),
         "r_status": saved["r_status"],
-        "notice": notice,
+        "notice": page_notice,
         "back_url": f"{reverse('trades')}#trade-{trade.opening_execution_id}",
         "error_summary_title": copy.SIGNUP_ERROR_SUMMARY_TITLE,  # design 12: reuse
         "copy": import_copy,
@@ -953,10 +953,10 @@ def trade_journal(request, pk):
             "journal save failed: %s user=%s model=JournalEntry", type(exc).__name__, user.pk
         )
         notice = {"variant": "attention", "text": import_copy.JOURNAL_SAVE_FAILED}
-        return _journal_page(request, trade, form, saved, notice=notice)
+        return _journal_page(request, trade, form, saved, page_notice=notice)
     if result is None:
         notice = {"variant": "info", "text": import_copy.JOURNAL_NOTHING_TO_SAVE}
-        return _journal_page(request, trade, form, saved, notice=notice)
+        return _journal_page(request, trade, form, saved, page_notice=notice)
     messages.success(request, import_copy.JOURNAL_SAVED)
     return redirect(reverse("trade_journal", args=[pk]))  # PRG, stay on the page (decision 8)
 
