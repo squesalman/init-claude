@@ -65,7 +65,7 @@ document.addEventListener("alpine:init", () => {
       this.from = Number(data.from);
       this.field = this.$root.querySelector("textarea");
       this.serverInvalid = this.field.getAttribute("aria-invalid") === "true";
-      this.count = [...this.field.value].length;
+      this.count = [...this.field.value.trim()].length;
     },
     get counter() {
       const data = this.$root.dataset;
@@ -81,7 +81,7 @@ document.addEventListener("alpine:init", () => {
     },
     update() {
       const before = this.count;
-      this.count = [...this.field.value].length;
+      this.count = [...this.field.value.trim()].length;
       if (this.count < this.from) this.live = "";
       else if (this.count > this.limit && before <= this.limit) this.live = this.overText;
       else if (this.count <= this.limit && before > this.limit) this.live = "";

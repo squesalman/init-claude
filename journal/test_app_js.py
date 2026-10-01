@@ -358,6 +358,11 @@ out.blur_under = t.c.live;
 // Code points: an emoji is one character, as on the server.
 t = counter("\u{1F600}".repeat(9000));
 out.emoji = t.c.counter;
+// The server strips the value before counting, so trailing whitespace is not a character.
+t = counter("a".repeat(10000) + "\n");
+out.trimmed_init = [t.c.counter, "aria-invalid" in t.attrs];
+t.type("  " + "a".repeat(10000) + "\r\n");
+out.trimmed_update = [t.c.counter, "aria-invalid" in t.attrs];
 // A server-set aria-invalid stays until the next page load.
 t = counter("short", true);
 t.type("shorter");
@@ -394,6 +399,13 @@ def test_counter_announces_two_moments_and_blur_only(char_counter):
     assert char_counter["blur_under"] == ""
     assert char_counter["blur_elsewhere"] == "kept"
     assert char_counter["blur_field"] == "Over the 10,000-character limit by 3."
+
+
+def test_counter_counts_the_trimmed_value_like_the_server(char_counter):
+    """Review PR 12: pasting exactly 10,000 chars plus the trailing newline Enter adds is
+    valid on the server (CharField strips), so the counter must not flag it."""
+    assert char_counter["trimmed_init"] == ["10,000 / 10,000", False]
+    assert char_counter["trimmed_update"] == ["10,000 / 10,000", False]
 
 
 def test_counter_aria_invalid_is_a_hint_that_never_drops_the_servers(char_counter):
