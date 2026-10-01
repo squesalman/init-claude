@@ -1,19 +1,28 @@
-{# RulesPanel (docs/design/journaling.md 3.2, 4.2; ADR-0007 section 9): the htmx swap target. Rendered inside the journal page and alone as the POST /rules/ htmx response (200 in every outcome). Native details: closed by default, open only after a rules save, error or failure. PR J2: unstyled. #}
-<div id="rules-panel">
-  <details id="rules-details"{% if rules_open %} open{% endif %}>
-    <summary>{{ copy.RULES_HEADING }} {% if rules_text %}{{ copy.RULES_ACTION_EDIT }}{% else %}{{ copy.RULES_ACTION_ADD }}{% endif %}</summary>
-    {% if rules_status %}<p role="status" tabindex="-1" autofocus>{{ rules_status }}</p>{% endif %}
-    {% if rules_notice %}<div tabindex="-1" autofocus>{% include "partials/notice.html" with variant="attention" body=rules_notice %}</div>{% endif %}
-    <form method="post" action="{% url 'rules' %}" hx-post="{% url 'rules' %}" hx-target="#rules-panel" hx-swap="outerHTML" novalidate>
-      {% csrf_token %}
-      {% if rules_next %}<input type="hidden" name="next" value="{{ rules_next }}">{% endif %}
-      {% include "partials/field.html" with field=rules_form.trading_rules %}
-      {# Shown by static/js/app.js when the POST gets no page back (5xx, network). #}
-      <div role="status" data-request-error="{{ copy.RULES_SAVE_FAILED }}">
-        <p hidden><span data-request-error-text></span></p>
-      </div>
-      <button type="submit" class="btn-secondary" data-busy="{{ copy.RULES_SAVE_BUSY }}">{{ copy.RULES_SAVE }}</button>
-    </form>
+{# RulesPanel (docs/design/journaling.md 3.2, 4.2; ADR-0007 section 9): the htmx swap target. Rendered inside the journal page and alone as the POST /rules/ htmx response (200 in every outcome). Native details: closed by default, open only after a rules save, error or failure. The summary's right-hand text (Add/Edit vs Close) and the preview are switched by CSS on details[open], no JS; nothing may sit between </details> and the preview (details[open] + .rules-preview). #}
+<div id="rules-panel" class="card mt-6">
+  <details id="rules-details" class="rules-details"{% if rules_open %} open{% endif %}>
+    <summary class="flex min-h-[44px] cursor-pointer items-center justify-between gap-3">
+      <span class="font-semibold">{{ copy.RULES_HEADING }}</span>
+      <span class="inline-flex items-center gap-1 font-medium text-link"><span class="rules-action-idle">{% if rules_text %}{{ copy.RULES_ACTION_EDIT }}{% else %}{{ copy.RULES_ACTION_ADD }}{% endif %}</span><span class="rules-action-close">{{ copy.RULES_ACTION_CLOSE }}</span><span class="rules-chevron">{% include "partials/icon.html" with name="chevron-down" %}</span></span>
+    </summary>
+    <div class="mt-2 space-y-3">
+      {% if rules_status %}<p role="status" tabindex="-1" autofocus class="flex items-start gap-2 font-medium"><span class="text-success">{% include "partials/icon.html" with name="success" %}</span><span>{{ rules_status }}</span></p>{% endif %}
+      {% if rules_notice %}<div tabindex="-1" autofocus>{% include "partials/notice.html" with variant="attention" body=rules_notice %}</div>{% endif %}
+      <form method="post" action="{% url 'rules' %}" hx-post="{% url 'rules' %}" hx-target="#rules-panel" hx-swap="outerHTML" novalidate class="space-y-3">
+        {% csrf_token %}
+        {% if rules_next %}<input type="hidden" name="next" value="{{ rules_next }}">{% endif %}
+        <div class="rules-field" x-data="charCounter" x-on:input="update" x-on:focusout="leave" data-limit="10000" data-from="9000" data-counter="{{ copy.COUNTER }}" data-near="{{ copy.COUNTER_LIVE_NEAR }}" data-over="{{ copy.COUNTER_LIVE_OVER }}" data-too-long="{{ copy.RULES_TOO_LONG }}">
+          {% include "partials/field.html" with field=rules_form.trading_rules focus_error=True %}
+          <p class="mt-1 text-right tabular-nums text-text-muted empty:hidden" x-text="counter"></p>
+          <p role="status" class="sr-only" x-text="live"></p>
+        </div>
+        {# Shown by static/js/app.js when the POST gets no page back (5xx, network). #}
+        <div role="status" data-request-error="{{ copy.RULES_SAVE_FAILED }}">
+          <p class="flex items-start gap-2 font-medium" hidden><span class="text-info">{% include "partials/icon.html" with name="info" %}</span><span data-request-error-text></span></p>
+        </div>
+        <button type="submit" class="btn-secondary" data-busy="{{ copy.RULES_SAVE_BUSY }}">{{ copy.RULES_SAVE }}</button>
+      </form>
+    </div>
   </details>
-  <p class="rules-preview whitespace-pre-line">{% if rules_text %}{{ rules_text }}{% else %}{{ copy.RULES_PROMPT }}{% endif %}</p>
+  <p class="rules-preview{% if not rules_text %} text-text-muted{% endif %}">{% if rules_text %}{{ rules_text }}{% else %}{{ copy.RULES_PROMPT }}{% endif %}</p>
 </div>

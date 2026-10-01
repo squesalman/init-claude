@@ -695,7 +695,7 @@ def test_rows_and_cards_link_to_the_journal_with_an_anchor_id(logged_in, user):
     d = Doc(body(logged_in.get("/trades/")))
 
     d.one("tr", id=f"trade-{opening.pk}")
-    d.one("li", id=f"trade-{opening.pk}")
+    d.one("li", id=f"trade-card-{opening.pk}")  # distinct from the row's (design 5.2)
     links = d.all("a", href=url(opening.pk))
     assert len(links) == 2  # table and card
     assert copy.LIST_JOURNAL_ADD in d.text

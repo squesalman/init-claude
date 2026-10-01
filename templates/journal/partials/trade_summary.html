@@ -1,0 +1,7 @@
+{# TradeSummary (docs/design/journaling.md 3.1): text only, not a link. h1 = symbol + side icon and word; result badge and signed P&L as on the list (sign and word, never color alone). #}
+<div class="mt-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
+  <h1 class="flex flex-wrap items-center gap-x-3 text-title font-semibold"><span class="break-all">{{ trade.symbol }}</span><span class="inline-flex items-center gap-1 text-base font-medium">{% if trade.direction == "long" %}{% include "partials/icon.html" with name="arrow-up" %}Long{% else %}{% include "partials/icon.html" with name="arrow-down" %}Short{% endif %}</span></h1>
+  <p class="flex items-center gap-3">{% include "journal/partials/result_badge.html" with result=trade.result %}<span class="whitespace-nowrap font-semibold tabular-nums{% if trade.result == "win" %} text-gain{% elif trade.result == "loss" %} text-loss{% endif %}">{{ trade.net_pnl|default:"Open" }}</span></p>
+</div>
+<p class="mt-1 text-text-muted tabular-nums">Opened {{ trade.opened }} ({{ trade.zone }})</p>
+<p class="mt-1 tabular-nums">Qty {{ trade.quantity }}{% if trade.entries %} · {{ trade.entries }}{% endif %} · {{ trade.entry }} to {% if trade.exit %}{{ trade.exit }}{% else %}<span aria-hidden="true">-</span><span class="sr-only">{{ exit_open_sr }}</span>{% endif %} · {{ trade.duration|default:"Open" }}{% if trade.account %} · <span class="break-words">{{ trade.account }}</span>{% endif %}</p>

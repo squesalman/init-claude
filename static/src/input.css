@@ -152,6 +152,59 @@
   .row-menu > summary::-webkit-details-marker { display: none; }
   .menu-item { @apply flex items-center gap-2 px-3 font-medium text-text no-underline; min-height: 44px; }
   .menu-item-danger { color: var(--danger); }
+
+  /* --- Journal page (docs/design/journaling.md 3, 8). Existing tokens only. --- */
+  .field textarea {
+    @apply mt-1 block w-full rounded border border-border-strong bg-surface px-3 py-2 text-base text-text;
+    resize: vertical;
+  }
+  .field textarea[aria-invalid="true"] { @apply border-2 border-attention; }
+  /* Django renders rows="10"; heights by the design's row counts (20px lines + padding/border). */
+  .note-field textarea { height: calc(6 * 20px + 18px); }
+  .rules-field textarea { height: calc(5 * 20px + 18px); max-height: calc(12 * 20px + 18px); }
+  /* Currency suffix inside the planned-risk box (3.5): the box carries border, error and focus
+     ring; selectors match .field input's specificity so they win. */
+  .field .input-suffix-box { @apply mt-1 flex rounded border border-border-strong bg-surface; }
+  .field .input-suffix-box input:not([type="hidden"]) { @apply mt-0 min-w-0 flex-1 rounded-r-none border-0; }
+  .field .input-suffix-box:has(input[aria-invalid="true"]) { @apply border-2 border-attention; }
+  .field .input-suffix-box input:focus-visible { outline: none; }
+  .field .input-suffix-box:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .input-suffix { @apply flex select-none items-center px-3 font-medium text-text-muted; }
+  /* My rules (3.2): Add/Edit vs Close and the preview switch on details[open], no JS. */
+  .rules-details > summary { list-style: none; }
+  .rules-details > summary::-webkit-details-marker { display: none; }
+  .rules-action-close { display: none; }
+  details[open] .rules-action-idle { display: none; }
+  details[open] .rules-action-close { display: inline; }
+  details[open] .rules-chevron { transform: rotate(180deg); }
+  .rules-chevron { display: inline-block; }
+  .rules-preview { @apply mt-2 whitespace-pre-line break-words line-clamp-3; }
+  details[open] + .rules-preview { display: none; }
+  /* Did you follow your rules (3.3): whole-label tiles, same neutral tokens for both answers;
+     selected = heavier border + check icon + the words, never color alone. */
+  .radio-tile {
+    @apply flex flex-1 cursor-pointer items-center gap-3 rounded border border-border-strong bg-surface px-3 font-medium text-text;
+    min-height: 48px;
+  }
+  .radio-tile input { @apply h-5 w-5 shrink-0; }
+  .radio-check { @apply ml-auto; visibility: hidden; }
+  .radio-tile input:checked ~ .radio-check { visibility: visible; }
+  .radio-tile:has(input:checked) { @apply border-text; box-shadow: inset 0 0 0 1px var(--text); }
+  .radio-tile:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+  /* Actions (3.7): sticky bar inside the form on phones, plain row from sm. */
+  .action-bar {
+    @apply sticky bottom-0 -mx-4 mt-6 flex flex-col gap-2 border-t border-border bg-surface px-4 pt-3;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+  @media (min-width: 640px) {
+    .radio-tile { min-height: 44px; }
+    .action-bar { @apply static mx-0 flex-row items-center gap-6 border-t-0 bg-transparent px-0 pb-0; }
+  }
+  /* The sticky bar must not cover a focused field (design 8): scroll-padding belongs on the
+     scroller (the viewport); the form itself does not scroll. */
+  @media (max-width: 639.98px) {
+    html:has(.action-bar) { scroll-padding-bottom: 8rem; }
+  }
 }
 
 /* htmx swap in flight (hx-indicator adds .htmx-request at runtime, so this sits outside
