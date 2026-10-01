@@ -7,6 +7,7 @@ ADR-0006 (tenant rules), follow-ups row 24 (upload checklist). Synthetic data on
 
 import io
 import re
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -251,12 +252,15 @@ def test_datalist_caps_at_ten_labels(logged_in, user):
     row = RawImportRow.objects.create(
         user=user, import_batch=batch, line_number=2, raw={}, status="imported"
     )
+    base = timezone.now()
     for i in range(12):
-        Execution.objects.create(
+        e = Execution.objects.create(
             user=user, broker="topstep", broker_account_label=f"L{i:02}",
             broker_execution_id=f"id{i}", symbol="CLZ6", side="buy", quantity=1, price=1,
-            currency="USD", executed_at=timezone.now(), source="import", raw_import_row=row,
+            currency="USD", executed_at=base, source="import", raw_import_row=row,
         )
+        # Explicit distinct created_at: auto_now_add ties on the Windows clock (follow-ups 38).
+        Execution.unscoped.filter(pk=e.pk).update(created_at=base + timedelta(seconds=i))
 
     labels = logged_in.get("/imports/").context["account_labels"]
 
