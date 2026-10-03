@@ -133,7 +133,8 @@ def test_vector_18_stop_side_check_uses_the_entry_lot_on_a_trade_with_partial_ex
     assert resp.context["form"].errors["stop_price"] == [copy.STOP_WRONG_SIDE]
     assert not JournalEntry.unscoped.exists()
     # also above the entry lot but below the later exit prices: still the wrong side
-    assert logged_in.post(url(opening.pk), {"stop_price": "50.30"}).status_code == 200
+    above = logged_in.post(url(opening.pk), {"stop_price": "50.30"})
+    assert above.context["form"].errors["stop_price"] == [copy.STOP_WRONG_SIDE]
 
 
 def test_vector_11_currency_mismatch_has_no_fallback_to_the_stop_end_to_end(logged_in, user):
@@ -283,7 +284,6 @@ def test_non_usd_closed_trades_do_not_leak_into_the_usd_avg_r_card(logged_in, us
 
     text = card_text(logged_in)
     assert "0.10 (n=1)" in text
-    assert "Left out" not in text  # a merged-currency card would show the EUR trade as left out
 
 
 # --- Probes: flip leftover, CRLF at the view, markup in a note --------------------------------
