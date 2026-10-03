@@ -276,10 +276,14 @@ def test_non_usd_closed_trades_do_not_leak_into_the_usd_avg_r_card(logged_in, us
     ex(user, "sell", "1", "110")
     eur = ex(user, "buy", "1", "100", symbol="DAX", currency="EUR")
     ex(user, "sell", "1", "140", symbol="DAX", currency="EUR")
-    logged_in.post(url(usd.pk), {"planned_risk_amount": "100"})
-    logged_in.post(url(eur.pk), {"planned_risk_amount": "20"})  # EUR R would be 2.0, USD 0.1
+    # Both saves must really happen: a dropped EUR save would leave the card at 0.10 anyway.
+    assert logged_in.post(url(usd.pk), {"planned_risk_amount": "100"}).status_code == 302
+    assert logged_in.post(url(eur.pk), {"planned_risk_amount": "20"}).status_code == 302
+    # EUR R would be 2.0, USD 0.1
 
-    assert "0.10 (n=1)" in card_text(logged_in)
+    text = card_text(logged_in)
+    assert "0.10 (n=1)" in text
+    assert "Left out" not in text  # a merged-currency card would show the EUR trade as left out
 
 
 # --- Probes: flip leftover, CRLF at the view, markup in a note --------------------------------
@@ -312,9 +316,11 @@ def test_crlf_note_of_exactly_10000_after_normalisation_saves_through_the_view(l
 def test_note_and_rules_markup_is_escaped_on_the_journal_page(logged_in, user):
     opening, _ = closed_trade(user)
     evil = "</textarea><script>alert(1)</script>"
-    logged_in.post(url(opening.pk), {"note": evil})
-    logged_in.post("/rules/", {"trading_rules": evil})
+    # Both saves must really happen, or the escaping of that field is never exercised.
+    assert logged_in.post(url(opening.pk), {"note": evil}).status_code == 302
+    assert logged_in.post("/rules/", {"trading_rules": evil}).status_code == 302
 
     markup = body(logged_in.get(url(opening.pk)))
 
-    assert "<script>alert" not in markup and markup.count("&lt;/textarea&gt;") >= 2
+    # note textarea + rules textarea + rules preview
+    assert "<script>alert" not in markup and markup.count("&lt;/textarea&gt;") >= 3
