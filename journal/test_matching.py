@@ -14,12 +14,12 @@ T0 = datetime(2026, 1, 1, 14, 30, tzinfo=UTC)
 
 
 def ex(id, side, qty, price, fee="0", minutes=0, *, trade_id=None, label="", symbol="X",
-       multiplier="1", currency="USD"):
+       multiplier="1", currency="USD", broker="topstep"):
     return SimpleNamespace(
         id=id, side=side, quantity=Decimal(qty), price=Decimal(price), fees=Decimal(fee),
         executed_at=T0 + timedelta(minutes=minutes), broker_trade_id=trade_id,
         broker_account_label=label, symbol=symbol, contract_multiplier=Decimal(multiplier),
-        currency=currency,
+        currency=currency, broker=broker,
     )
 
 
@@ -210,3 +210,102 @@ def test_multiplier_comes_from_the_opening_execution():
     ])
 
     assert trade.multiplier == Decimal("1000")
+
+
+# --- ADR-0008 section 1: broker joins the bucket key; manual vectors 30, 32, 33 -----------------
+
+K_A, K_B = "manual:" + "a" * 32, "manual:" + "b" * 32
+
+
+def test_same_key_string_on_two_brokers_never_pairs():
+    # ADR-0008 option B's threat: a hand-crafted CSV whose Id equals a manual key.
+    trades = derive_trades([
+        ex(1, "buy", 1, "100.00", minutes=0, trade_id=K_A, broker="manual"),
+        ex(2, "sell", 1, "105.00", minutes=1, trade_id=K_A, broker="topstep"),
+    ])
+
+    assert [(t.opening_execution_id, t.is_open, t.direction) for t in trades] == [
+        (1, True, "long"), (2, True, "short"),
+    ]
+
+
+def test_null_keys_share_one_bucket_per_broker_only():
+    trades = derive_trades([
+        ex(1, "buy", 1, "100.00", minutes=0, broker="manual"),
+        ex(2, "sell", 1, "105.00", minutes=1, broker="other"),
+    ])
+
+    assert len(trades) == 2 and all(t.is_open for t in trades)
+
+
+def test_vector_30_two_open_manual_longs_with_own_keys_stay_two_trades():
+    fills = [
+        ex(1, "buy", 10, "100.00", minutes=0, trade_id=K_A, symbol="AAPL", broker="manual"),
+        ex(2, "buy", 5, "101.00", minutes=30, trade_id=K_B, symbol="AAPL", broker="manual"),
+    ]
+    a, b = derive_trades(fills)
+    assert (a.opening_execution_id, a.is_open, a.quantity, a.entry_lot_count) == (1, True, 10, 1)
+    assert (b.opening_execution_id, b.is_open, b.quantity, b.entry_lot_count) == (2, True, 5, 1)
+
+    fills.append(ex(3, "sell", 5, "103.00", "1.00", 90, trade_id=K_B, symbol="AAPL",
+                    broker="manual"))
+    a, b = derive_trades(fills)
+    assert (a.opening_execution_id, a.is_open, a.quantity) == (1, True, 10)
+    assert (b.opening_execution_id, b.is_open) == (2, False)
+    assert (b.gross_pnl, b.fees, b.net_pnl) == (Decimal("10.00"), Decimal("1.00"), Decimal("9.00"))
+
+
+def test_vector_30_companion_null_keys_would_merge_the_two_trades():
+    [trade] = derive_trades([
+        ex(1, "buy", 10, "100.00", minutes=0, symbol="AAPL", broker="manual"),
+        ex(2, "buy", 5, "101.00", minutes=30, symbol="AAPL", broker="manual"),
+        ex(3, "sell", 5, "103.00", "1.00", 90, symbol="AAPL", broker="manual"),
+    ])
+
+    assert (trade.is_open, trade.quantity, trade.entry_lot_count, trade.net_pnl) == (
+        True, 15, 2, None,
+    )
+
+
+def test_vector_32a_equal_times_keep_the_entry_as_opener():
+    [trade] = derive_trades([
+        ex(1, "buy", 10, "100.00", minutes=0, trade_id=K_A, broker="manual"),
+        ex(2, "sell", 10, "100.50", minutes=0, trade_id=K_A, broker="manual"),
+    ])
+
+    assert (trade.direction, trade.opening_execution_id, trade.gross_pnl, trade.is_open) == (
+        "long", 1, Decimal("5.00"), False,
+    )
+
+
+def test_vector_32b_an_exit_before_the_entry_would_flip_the_opener():
+    # Why the forms reject it: the exit sorts first, opens a short, and the trade id moves.
+    [trade] = derive_trades([
+        ex(1, "buy", 10, "100.00", minutes=1, trade_id=K_A, broker="manual"),
+        ex(2, "sell", 10, "105.00", minutes=0, trade_id=K_A, broker="manual"),
+    ])
+
+    assert (trade.direction, trade.opening_execution_id, trade.gross_pnl) == (
+        "short", 2, Decimal("50.00"),
+    )
+
+
+def test_vector_33a_a_one_leg_entry_qty_edit_leaves_the_trade_open():
+    [trade] = derive_trades([
+        ex(1, "buy", 20, "100.00", minutes=0, trade_id=K_A, broker="manual"),
+        ex(2, "sell", 10, "105.00", minutes=1, trade_id=K_A, broker="manual"),
+    ])
+
+    assert (trade.is_open, trade.quantity, trade.net_pnl) == (True, 20, None)
+
+
+def test_vector_33b_a_one_leg_exit_qty_edit_flips_into_a_second_trade():
+    closed, flipped = derive_trades([
+        ex(1, "buy", 10, "100.00", minutes=0, trade_id=K_A, broker="manual"),
+        ex(2, "sell", 15, "105.00", minutes=1, trade_id=K_A, broker="manual"),
+    ])
+
+    assert (closed.is_open, closed.net_pnl) == (False, Decimal("50.00"))
+    assert (flipped.is_open, flipped.direction, flipped.quantity, flipped.avg_entry_price) == (
+        True, "short", 5, Decimal("105.00"),
+    )

@@ -1,6 +1,8 @@
 import logging
+import re
 from datetime import datetime
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -22,7 +24,14 @@ from accounts import copy
 from journal import copy as import_copy
 from journal import display
 from journal.decorators import htmx_login_required, is_htmx
-from journal.forms import JournalEntryForm, RulesForm, UploadForm, safe_filename
+from journal.forms import (
+    CloseTradeForm,
+    JournalEntryForm,
+    ManualTradeForm,
+    RulesForm,
+    UploadForm,
+    safe_filename,
+)
 from journal.importers.topstep import ImportFileError, parse_timestamp
 from journal.matching import derive_trades
 from journal.models import (
@@ -35,8 +44,12 @@ from journal.models import (
 from journal.services import (
     BROKER,
     TRY_AGAIN,
+    AlreadyClosed,
+    ExitBeforeEntry,
     ImportRetryError,
     StaleConfirm,
+    add_manual_trade,
+    close_manual_trade,
     delete_import_batch,
     find_trade,
     import_file,
@@ -146,13 +159,6 @@ def _result(trade) -> str:
     return "win" if trade.net_pnl > 0 else "loss" if trade.net_pnl < 0 else "breakeven"
 
 
-def _opened(when) -> str:
-    """Design 5.1 column 1: "Sep 26, 2:31 PM", with the year when it is not this year."""
-    local = timezone.localtime(when)
-    this_year = local.year == timezone.localtime().year
-    return dateformat.format(local, "M j, g:i A" if this_year else "M j, Y, g:i A")
-
-
 _JOURNAL_LABELS = {  # design 5.3 state -> label; the state is also the icon key
     "add": import_copy.LIST_JOURNAL_ADD,
     "followed": import_copy.LIST_JOURNAL_FOLLOWED,
@@ -180,7 +186,7 @@ def _journal_state(entry) -> str:
 
 
 def _trade_row(trade, entry=None) -> dict:
-    opened, state = _opened(trade.opened_at), _journal_state(entry)
+    opened, state = display.opened(trade.opened_at), _journal_state(entry)
     label = _JOURNAL_LABELS[state]
     return {
         "id": trade.opening_execution_id,  # the trade id (ADR-0003 section 6); id="trade-<id>"
@@ -321,11 +327,14 @@ def _batch_label(user):
     )
 
 
-def _account_labels(user) -> list[str]:
-    """Datalist suggestions: the user's own non-blank labels, most recently used first."""
+def _account_labels(user, broker=BROKER) -> list[str]:
+    """Datalist suggestions: the user's own non-blank labels, most recently used first.
+    broker=None is every broker (manual entry, spec AC 31)."""
+    executions = Execution.objects.for_user(user)
+    if broker is not None:
+        executions = executions.filter(broker=broker)
     return list(
-        Execution.objects.for_user(user)
-        .filter(broker=BROKER)
+        executions
         .exclude(broker_account_label="")
         .values("broker_account_label")
         .annotate(last_used=Max("created_at"))
@@ -864,7 +873,16 @@ def _trade_not_found(request):
     return render(request, "journal/trade_not_found.html", {"copy": import_copy}, status=404)
 
 
-def _trade_summary(trade) -> dict:
+def _is_manual(opening) -> bool:
+    """The same rule as services._manual_fills, so a NULL-key manual row (test stand-ins for
+    fill-only data) never shows a link that leads to the 404 (ADR-0008 section 5)."""
+    return (
+        opening.source == opening.broker == Execution.SOURCE_MANUAL
+        and opening.broker_trade_id is not None
+    )
+
+
+def _trade_summary(trade, opening) -> dict:
     row = _trade_row(trade)
     keys = ("symbol", "direction", "result", "net_pnl", "opened", "quantity", "entry", "exit",
             "duration")
@@ -872,6 +890,7 @@ def _trade_summary(trade) -> dict:
         **{k: row[k] for k in keys},
         "id": trade.opening_execution_id,
         "is_open": trade.is_open,
+        "is_manual": _is_manual(opening),
         "zone": timezone.get_current_timezone_name(),
         "account": trade.account_label or None,
         "entries": import_copy.TRADE_ENTRIES.format(n=trade.entry_lot_count)
@@ -894,14 +913,14 @@ def _rules_context(user, rules_form=None, *, rules_open=False, status=None, noti
     }
 
 
-def _journal_page(request, trade, form, saved, *, page_notice=None, **rules):
+def _journal_page(request, opening, trade, form, saved, *, page_notice=None, **rules):
     """ADR-0007 section 9 contract. Uses no query, so a failed save can re-render."""
     multi_leg = trade.entry_lot_count > 1
     risk_values = [form[name].value() for name in ("stop_price", "planned_risk_amount")]
     journal_url = reverse("trade_journal", args=[trade.opening_execution_id])
     context = {
         "title": import_copy.JOURNAL_TITLE.format(symbol=trade.symbol),
-        "trade": _trade_summary(trade),
+        "trade": _trade_summary(trade, opening),
         "form": form,
         **_rules_context(request.user, next_url=journal_url, **rules),
         "risk_open": multi_leg or saved["has_risk"]
@@ -934,7 +953,7 @@ def trade_journal(request, pk):
     data = request.POST if request.method == "POST" else None
     form = JournalEntryForm(data, instance=entry or JournalEntry(), user=user, trade=trade)
     if data is None or not form.is_valid():
-        return _journal_page(request, trade, form, saved)
+        return _journal_page(request, opening, trade, form, saved)
     try:
         result = save_journal_entry(user, opening, trade, **form.cleaned_data)
     except (DatabaseError, CrossTenantForeignKeyError) as exc:
@@ -943,10 +962,10 @@ def trade_journal(request, pk):
             "journal save failed: %s user=%s model=JournalEntry", type(exc).__name__, user.pk
         )
         notice = {"variant": "attention", "text": import_copy.JOURNAL_SAVE_FAILED}
-        return _journal_page(request, trade, form, saved, page_notice=notice)
+        return _journal_page(request, opening, trade, form, saved, page_notice=notice)
     if result is None:
         notice = {"variant": "info", "text": import_copy.JOURNAL_NOTHING_TO_SAVE}
-        return _journal_page(request, trade, form, saved, page_notice=notice)
+        return _journal_page(request, opening, trade, form, saved, page_notice=notice)
     messages.success(request, import_copy.JOURNAL_SAVED)
     return redirect(reverse("trade_journal", args=[pk]))  # PRG, stay on the page (decision 8)
 
@@ -1002,7 +1021,177 @@ def save_rules(request):
     found = find_trade(user, pk)
     if found is None:
         return _trade_not_found(request)
-    _, trade = found
+    opening, trade = found
     entry = JournalEntry.objects.for_user(user).filter(opening_execution_id=pk).first()
     journal_form = JournalEntryForm(instance=entry or JournalEntry(), user=user, trade=trade)
-    return _journal_page(request, trade, journal_form, _saved(trade, entry), **rules)
+    return _journal_page(request, opening, trade, journal_form, _saved(trade, entry), **rules)
+
+
+# --- Manual trade entry: add and close (ADR-0008 sections 4-7) ---------------------------------
+
+_NONCE = re.compile(r"[0-9a-f]{32}")
+_MAX_TOKEN_CHARS = 200  # a real token is about 60
+
+
+def _add_signer(user_id) -> signing.Signer:
+    """The add form's token: a nonce that becomes the trade's key (ADR-0008 section 4). Bound
+    to the user, so a tampered POST can't choose its own bucket or replay another's token."""
+    return signing.Signer(salt=f"trade-add:{user_id}")
+
+
+def _add_nonce(user_id, token) -> str | None:
+    """The nonce in a valid add token; None for a forged, another user's or missing one."""
+    if not isinstance(token, str) or len(token) > _MAX_TOKEN_CHARS:
+        return None
+    try:
+        nonce = _add_signer(user_id).unsign(token)
+    except signing.BadSignature:
+        return None
+    return nonce if _NONCE.fullmatch(nonce) else None
+
+
+def _save_failed() -> dict:
+    return {"variant": "attention", "text": import_copy.MANUAL_SAVE_FAILED}
+
+
+def _pv_context(form) -> dict:
+    """Design 13 point-value keys, from the form's own state (design 5.1)."""
+    value = form.pv_lookup
+    return {
+        "pv_state": form.pv_state,
+        "pv_root": form.pv_root,
+        "pv_value_display": display.quantity(value) if value is not None else None,
+        "pv_known_help": import_copy.POINT_VALUE_KNOWN_HELP.format(root=form.pv_root)
+        if value is not None else None,
+        "pv_symbol": form.pv_symbol,
+    }
+
+
+def _manual_page(request, form, mode, *, opening=None, trade=None, form_token=None,
+                 notice=None):
+    """Design 13 context for trade_form.html (mode "add" or "close"). No query on close."""
+    more = ("fees", "account") if mode == "add" else ("fees",)
+    context = {
+        "mode": mode,
+        "form": form,
+        "zone": timezone.get_current_timezone_name(),
+        "more_open": any(
+            form.has_error(name) or str(form[name].value() or "").strip() for name in more
+        ),
+        "show_fees": True,  # false only for edit-open (PR M2b)
+        "show_exit": True,
+        "exit_required": mode == "close",
+        "notice": notice,
+        "error_summary_title": copy.SIGNUP_ERROR_SUMMARY_TITLE,  # design 12: reuse
+        "exit_open_sr": copy.EXIT_OPEN_SR,
+        "copy": import_copy,
+    }
+    if mode == "add":
+        labels = _account_labels(request.user, broker=None)
+        context.update(
+            _pv_context(form),
+            title=import_copy.ADD_TITLE,
+            form_token=form_token,
+            account_labels=labels,  # autoescaped option values only
+            account_placeholder=(
+                import_copy.ACCOUNT_PLACEHOLDER_SAVED if labels
+                else import_copy.MANUAL_ACCOUNT_PLACEHOLDER
+            ),
+            back_url=reverse("trades"),
+        )
+    else:
+        context.update(
+            title=import_copy.CLOSE_TITLE.format(symbol=trade.symbol),
+            trade=_trade_summary(trade, opening),
+            size_display=import_copy.SIZE_VALUE.format(quantity=display.quantity(trade.quantity)),
+            entry_time_display=display.opened_with_year(trade.opened_at),
+            back_url=reverse("trade_journal", args=[trade.opening_execution_id]),
+        )
+    return render(request, "journal/trade_form.html", context)
+
+
+def _manual_failed(exc, user, action):
+    # Class, user id and model only: the cross-tenant message names another user's id.
+    log.error("manual %s failed: %s user=%s model=Execution", action, type(exc).__name__, user.pk)
+
+
+@htmx_login_required
+@require_http_methods(["GET", "HEAD", "POST"])
+def trade_add(request):
+    """Add a manual trade (spec AC 1-31, 53). PRG to the journal page. The signed token is
+    the double-submit guard: a replay gets the first request's redirect (AC 14)."""
+    user = request.user
+    data = request.POST if request.method == "POST" else None
+    form = ManualTradeForm(data, user=user)
+    nonce = _add_nonce(user.pk, data.get("form_token")) if data is not None else None
+    notice = None
+    if data is not None:
+        if nonce is None:
+            notice = _save_failed()  # nothing written; a fresh token below (ADR-0008 section 4)
+        elif form.is_valid():
+            try:
+                pk = add_manual_trade(user, nonce, **form.cleaned_data)
+            except (DatabaseError, CrossTenantForeignKeyError) as exc:
+                _manual_failed(exc, user, "add")
+                notice = _save_failed()
+            else:
+                messages.success(request, import_copy.TRADE_ADDED)
+                return redirect(reverse("trade_journal", args=[pk]))
+    token = _add_signer(user.pk).sign(nonce or uuid4().hex)  # kept across a re-render
+    return _manual_page(request, form, "add", form_token=token, notice=notice)
+
+
+@htmx_login_required
+@require_http_methods(["GET", "HEAD", "POST"])
+def trade_close(request, pk):
+    """Close an open manual trade with one full-size exit (AC 32-36). No token: the locked
+    rows decide, so a double submit or a second tab gets ALREADY_CLOSED (ADR-0008 section 4).
+    GET does not lock (no atomic); only the service does."""
+    user = request.user
+    found = find_trade(user, pk)
+    if found is None or not _is_manual(found[0]):
+        return _trade_not_found(request)  # missing, foreign, imported, closing fill, NULL key
+    opening, trade = found
+    journal_url = reverse("trade_journal", args=[pk])
+    if not trade.is_open:
+        messages.info(request, import_copy.ALREADY_CLOSED)
+        return redirect(journal_url)
+    data = request.POST if request.method == "POST" else None
+    form = CloseTradeForm(data, user=user, instance=opening, trade=trade)
+    page = {"opening": opening, "trade": trade}
+    if data is None or not form.is_valid():
+        return _manual_page(request, form, "close", **page)
+    try:
+        closed = close_manual_trade(user, pk, **form.cleaned_data)
+    except AlreadyClosed:
+        messages.info(request, import_copy.ALREADY_CLOSED)
+        return redirect(journal_url)
+    except ExitBeforeEntry as exc:
+        error = import_copy.EXIT_BEFORE_ENTRY.format(entry=display.opened_with_year(exc.args[0]))
+        form.add_error("exit_time", error)
+        return _manual_page(request, form, "close", **page)
+    except (DatabaseError, CrossTenantForeignKeyError) as exc:
+        _manual_failed(exc, user, "close")
+        return _manual_page(request, form, "close", notice=_save_failed(), **page)
+    if closed is None:
+        return _trade_not_found(request)  # deleted after the read above
+    messages.success(request, import_copy.TRADE_CLOSED)
+    return redirect(journal_url)
+
+
+@require_http_methods(["GET", "HEAD"])
+def trade_point_value(request):
+    """Design 5.4: the htmx partial for #point-value plus the out-of-band live region. No
+    query of its own. Logged out: a bare 401 with no HX-Redirect, so htmx ignores it and the
+    typed form is never thrown away (why it can't use htmx_login_required)."""
+    if not request.user.is_authenticated:
+        return HttpResponse(status=401)
+    form = ManualTradeForm(user=request.user, initial={"symbol": _query(request).get("symbol")})
+    context = {**_pv_context(form), "form": form, "copy": import_copy, "oob": True}
+    if form.pv_state == "known":
+        context["pv_live"] = import_copy.POINT_VALUE_LIVE_KNOWN.format(
+            root=form.pv_root, value=context["pv_value_display"]
+        )
+    elif form.pv_state == "unknown":
+        context["pv_live"] = import_copy.POINT_VALUE_LIVE_ASK.format(symbol=form.pv_symbol)
+    return render(request, "journal/partials/point_value.html", context)

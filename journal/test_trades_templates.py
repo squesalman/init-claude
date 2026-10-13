@@ -249,11 +249,12 @@ def test_populated_page_has_the_import_trades_button(logged_in, user):
 # --- empty states (5.4) ---------------------------------------------------------------------
 
 
-def test_empty_state_a_has_one_action_and_no_cards_or_table(logged_in):
+def test_empty_state_a_has_import_and_add_trade_and_no_cards_or_table(logged_in):
+    # docs/design/manual-entry.md 3.2: Add trade joins Import trades in both empty states.
     text = main_of(markup(logged_in))
     d = Doc(text)
     assert copy.TRADES_EMPTY_HEADING in d.text and copy.TRADES_EMPTY_BODY in d.text
-    assert [a["href"] for a in d.all("a")] == ["/imports/"]
+    assert [a["href"] for a in d.all("a")] == ["/imports/", "/trades/new/"]
     assert not d.all("table") and 'role="group"' not in text and not d.all("select")
 
 
@@ -261,7 +262,7 @@ def test_empty_state_b_links_the_last_import(logged_in):
     batch = uploaded(logged_in, csv_bytes(UNSUPPORTED))
     d = Doc(main_of(markup(logged_in)))
     assert copy.TRADES_EMPTY_B_BODY in d.text and copy.TRADES_EMPTY_B_ACTION in d.text
-    assert [a["href"] for a in d.all("a")] == [f"/imports/{batch.pk}/"]
+    assert [a["href"] for a in d.all("a")] == [f"/imports/{batch.pk}/", "/trades/new/"]
     assert not d.all("table")
 
 

@@ -1,6 +1,7 @@
 """
 Executions -> trades, computed on read (ADR-0003 section 5, docs/domain/pnl-and-matching.md
-section 1). FIFO per (account label, symbol, broker_trade_id) bucket (ADR-0004 section 3).
+section 1). FIFO per (broker, account label, symbol, broker_trade_id) bucket (ADR-0004 section 3,
+ADR-0008 section 1: buckets never cross brokers, so a manual key can't pair with a Topstep Id).
 
 Pure over attributes: works on Execution rows or any object with the same fields, no DB.
 """
@@ -8,7 +9,7 @@ Pure over attributes: works on Execution rows or any object with the same fields
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 
 # ponytail: every currency rounds to 2 dp (only USD exists today); add an ISO 4217
 # minor-unit table when a non-2-dp currency (JPY) is imported.
@@ -45,9 +46,15 @@ def derive_trades(executions) -> list[Trade]:
     """
     buckets = defaultdict(list)
     for execution in sorted(executions, key=lambda e: e.executed_at):
-        key = (execution.broker_account_label, execution.symbol, execution.broker_trade_id)
+        key = (
+            execution.broker, execution.broker_account_label, execution.symbol,
+            execution.broker_trade_id,
+        )
         buckets[key].append(execution)
-    trades = [trade for bucket in buckets.values() for trade in _fifo(bucket)]
+    # NUMERIC(20,10) operands: price x quantity x multiplier is up to 60 digits, past the
+    # default prec 28, and _money()'s quantize would raise. 60 keeps the product exact.
+    with localcontext(prec=60):
+        trades = [trade for bucket in buckets.values() for trade in _fifo(bucket)]
     return sorted(trades, key=lambda t: t.opened_at)
 
 
