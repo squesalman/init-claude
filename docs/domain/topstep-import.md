@@ -222,6 +222,18 @@ expected_trades = [   # ordered by opened_at
 - `Id` stability across re-exports (§4) — inferred, not proven with a second download.
 - Multiplier table entries for roots other than `CL`/`MCL` (`ES`, `MES`, `NQ`, `MNQ`, `GC`, …) — no
   sample seen yet, do not trust until verified.
+- **Follow-up for the user (raised by manual entry, 2026-10-13): which roots to verify next.**
+  Manual entry's known-root prefill and the importer share this one table, so every root added
+  here also stops asking manual users to type a point value. Roots traders most commonly need,
+  **no values listed and none to be added until verified**: equity index `ES`, `MES`, `NQ`, `MNQ`,
+  `YM`, `MYM`, `RTY`, `M2K`; metals `GC`, `MGC`, `SI`; energy `NG`; rates `ZN`, `ZB`; FX futures
+  `6E`. Verify each the way `CL`/`MCL` were: a real export row where
+  `(ExitPrice - EntryPrice) * Size * multiplier * side_sign` equals the `PnL` column exactly, or
+  the exchange's contract specification in hand. Until then these roots are "unknown" and the user
+  types the point value. Unverified values currently written elsewhere (ADR-0003's `contract_multiplier`
+  column note cites two) belong to the architect to correct; this doc adds none.
+- Manual-entry fees follow §5: all fees on the exit fill, entry 0. Rules and vectors:
+  `pnl-and-matching.md` §7 and vectors 24-34.
 - Non-USD Topstep contracts — none in the sample; `currency='USD'` is an assumption for this
   export, not proven for all Topstep accounts.
 - Whether TopstepX ever exports a *raw fill* format for some account types (this doc only covers
