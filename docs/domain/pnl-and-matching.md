@@ -12,16 +12,19 @@ All amounts below use `Decimal`, never float, per `CLAUDE.md` and ADR-0002. Mone
 
 ## 1. Fill → trade matching algorithm
 
-**Method: FIFO, per user + account + instrument (+ `broker_trade_id` bucket, see below).** Not configurable in MVP (LIFO/average-cost
+**Method: FIFO, per user + broker + account + instrument (+ `broker_trade_id` bucket, see below).** Not configurable in MVP (LIFO/average-cost
 are a v2 toggle at most, and only if a user asks — do not build the switch speculatively).
 
 **Bucket by `broker_trade_id` (ADR-0004 §3).** When a broker reports closed round-trips (Topstep),
 the importer sets `broker_trade_id` on both legs of a row, and FIFO runs unchanged inside each
-`(user, account, instrument, broker_trade_id)` bucket, so each row is exactly one trade. Executions
-with `broker_trade_id = NULL` (a future fill-only broker importer; **not** manual entry, see below)
-share one bucket per `(user, account, instrument)` and get the plain FIFO below, including merging
-nested same-direction lifecycles into one flat-to-flat trade. Everything in this doc after this
-paragraph describes FIFO within one bucket.
+`(user, broker, account, instrument, broker_trade_id)` bucket, so each row is exactly one trade.
+`broker` is in the key (ADR-0008 §1, user ruling 2026-10-13) so a `broker_trade_id` from one source
+can never pair with the same string from another (for example a Topstep `Id` that happens to look
+like a manual key). Executions with `broker_trade_id = NULL` (a future fill-only broker importer;
+**not** manual entry, see below) share one bucket per `(user, broker, account, instrument)`, so two
+brokers' fills never merge even on the same label and symbol, and get the plain FIFO below,
+including merging nested same-direction lifecycles into one flat-to-flat trade. Everything in this
+doc after this paragraph describes FIFO within one bucket.
 
 **Manual entry gets its own key per trade (user ruling 2026-10-13; the key's format is
 ADR-0008's).** A manual trade is one entry fill plus at most one same-size exit fill, and both
@@ -35,7 +38,7 @@ for the manual-entry rules and vectors 24-34.
 
 - An **execution** (fill): `(id, user_id, account_id, instrument, side [buy/sell],
   qty, price, fee, currency, executed_at_utc, broker, broker_execution_id)`. Imported fills are
-  immutable. Manual fills may be edited in place (user ruling 2026-10-13, ADR-0008 pending); the
+  immutable. Manual fills may be edited in place (user ruling 2026-10-13, ADR-0008 Accepted); the
   matcher is a pure function of the current fills, computed on read, so an edit simply changes
   the next derivation.
 - A **position** per `(user, account, instrument)` is a FIFO queue of **open lots**:
@@ -482,8 +485,11 @@ expected = {"avg_r": "0.12", "n": 2, "left_out": 2}
 ### Manual-entry vectors 24-34 (hand-computed; rules in §7)
 
 Notation: fills are `(id, side, qty, price, fee, ts, mult, key)`. `K_A`, `K_B` are placeholders for
-the per-trade pairing key (format: ADR-0008); each is shared by the entry and exit fill of one
-manual trade and by nothing else. Symbols `AAPL`, `TSLA`, `ZZZH7` are invented; `ZZZ` is a root
+the per-trade pairing key, in the format `manual:<32 hex>` (ADR-0008 §1); each is shared by the
+entry and exit fill of one manual trade and by nothing else. The tests use any two distinct
+values of that format (for example `manual:` + `uuid4().hex`); no vector depends on the actual
+hex digits. All fills in a vector have the same `broker` (the manual source), so adding `broker`
+to the bucket key changes no vector and no expected value. Symbols `AAPL`, `TSLA`, `ZZZH7` are invented; `ZZZ` is a root
 that never enters the multiplier table. Currency `USD`, label `''`. Net = gross - fees, rounded
 once to 2 dp `ROUND_HALF_EVEN`; R to 4 dp.
 

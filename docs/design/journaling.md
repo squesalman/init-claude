@@ -293,7 +293,7 @@ Avg R's "Left out: N" is a count only. The journal page of each such trade carri
 
 ### 4.6 404
 
-Unknown id, another user's id, and a closing fill's id all return the same page (spec AC 11, 12). Standard shell with h1 "We couldn't find that trade", body "It may have been removed along with an import.", link "Back to trades". Do not say whose trade it is or that it exists.
+Unknown id, another user's id, and a closing fill's id all return the same page (spec AC 11, 12). Since manual entry (2026-10-13, [`manual-entry.md`](manual-entry.md) section 12) the same page also serves an imported trade on a manual-only URL (`/close/`, `/edit/`, `/delete/`) and a manual trade deleted in another tab. Standard shell with h1 "We couldn't find that trade", body "It may have been deleted, or removed along with an import." (`NOT_FOUND_BODY`, replaces "It may have been removed along with an import."), link "Back to trades". Do not say whose trade it is or that it exists.
 
 ---
 

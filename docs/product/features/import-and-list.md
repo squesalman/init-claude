@@ -81,9 +81,14 @@ so this is within it.)
 
 **Empty states**
 - No imports at all: no stat cards, no table. Heading "No trades yet". Body "Upload your TopstepX
-  'Trades' export and your trades show up here." Primary button to the upload page.
+  'Trades' export, or add a trade by hand. Your trades show up here." Primary button to the upload
+  page, plus a secondary "Add trade" button next to it.
 - At least one import but zero trades (every row skipped or failed): same heading, body "Your last
-  upload didn't add any trades." with a link to that import's detail page.
+  upload didn't add any trades." with a link to that import's detail page, plus the same secondary
+  "Add trade" button.
+- *2026-10-13: manual-entry pass. The "Add trade" button and the new body in the first state come from
+  [`manual-entry.md`](manual-entry.md) AC 1 and `design/manual-entry.md` 3.2. Nothing else in this
+  section changed. This spec stays the authority for the empty-state behavior.*
 - Trades exist but none are closed (only open trades): the table shows them, the cards render in their
   n=0 form (§3).
 

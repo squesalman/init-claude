@@ -1,6 +1,6 @@
 # Manual trade entry: add, close, edit, delete
 
-- **Status:** Draft: user rulings applied 2026-10-13 (three rounds), domain rulings applied (`pnl-and-matching.md` §7, vectors 24-34); pending the user accepting the design draft and ADR-0008 (do not build until the user accepts it and ADR-0008 is Accepted)
+- **Status:** Accepted (user, 2026-10-13). User rulings applied (three rounds plus the ADR-0008 rulings: AC 40 and AC 36), domain rulings applied (`pnl-and-matching.md` §7, vectors 24-34); [ADR-0008](../../adr/0008-manual-entry.md) is Accepted. Design draft `design/manual-entry.md` is owned by `ux-designer`.
 - **Owner:** `product-manager`
 - **Covers:** `mvp.md` story 2 (manual trade entry). Supersedes story 2's field list: exit price and exit time are optional here (ruling 1).
 - **Depends on:** ADR-0003 §4-§6 (executions are the truth, no trade table), ADR-0004 §3 (pairing key), ADR-0005 (delete semantics, counted confirmation), ADR-0007 (journal entry, RESTRICT FK, stale guard, `PlainDecimalField`), `docs/domain/pnl-and-matching.md` (§1 matcher, §3 R, §7 manual entry, vectors 1-34), `docs/domain/topstep-import.md` (§2 multipliers, §5 fees on the exit fill, §7 roots to verify, vectors T1-T2), `docs/design/manual-entry.md` (UX draft), `journal/importers/topstep.py` (`MULTIPLIERS`, root pattern), `journal/matching.py` (bucket key, line 48)
@@ -98,7 +98,7 @@ The form has no note, no stop, no planned risk and no rules answer. The Journal 
 ### Edit, close, delete
 
 - **Close this trade:** shown only on open **manual** trades. Exit price and exit time are required; Fees sits in More details (alone: the Account label is shown read-only). Size is shown read-only (full size, no partial close). The exit fill copies symbol, label, currency, point value and the pairing key from the trade, takes the opposite side, and carries the full quantity.
-- **Edit:** only for `source=manual` trades. The same fields as add, except on an **open** trade: no exit inputs and no Fees (edit never adds a fill), only a link to Close this trade. Close is the only way to add an exit. Fills are updated in place (same ids), so the journal entry stays attached and the journal URL keeps working. Which fields lock once a journal entry exists is ADR-0008's decision (see "Open questions"); locked fields render read-only with a one-line reason. A closed trade cannot be reopened by blanking the exit.
+- **Edit:** only for `source=manual` trades. The same fields as add, except on an **open** trade: no exit inputs and no Fees (edit never adds a fill), only a link to Close this trade. Close is the only way to add an exit. Fills are updated in place (same ids), so the journal entry stays attached and the journal URL keeps working. No field is locked when a journal entry exists (ADR-0008 §2): every editable field stays editable. A closed trade cannot be reopened by blanking the exit.
 - **Delete:** shown only on manual trades. GET shows the confirmation and never deletes. POST only, with CSRF.
   - No journal entry: one ordinary confirm, no checkbox.
   - A journal entry exists: the confirm says so, shows the note in full (so the user can copy it), says whether it has a written note, an answer, and a stop or planned risk amount, and keeps the Delete button disabled until the user ticks "Also delete my journal entry. This can't be undone." The server enforces the tick. This mirrors ADR-0005's import delete so the two dialogs read alike.
@@ -164,8 +164,8 @@ Tests reuse existing vectors; do not invent new formulas. Vectors used: domain v
 ### Edit
 37. Given a manual trade, then Edit is available, the form is prefilled with current values (times in the user's zone), and the validation is the same as add (AC 3-13, 16-22, 28-31), with two differences: on an open trade there are no exit inputs and no Fees (AC 29), and on a closed trade the exit pair is required (AC 41).
 38. Given a valid edit, then the trade's existing fills are updated in place: no `Execution` row is added or removed (an edit of an open trade can never add the exit; Close is the only way to add one), ids and `created_at` are unchanged, and `user`, `source` and `broker` are unchanged. Given a closed trade, then both fills are written in one transaction and keep agreeing on symbol, label, point value, quantity and pairing key (vectors 29, 33).
-39. Given a trade with a journal entry, when any edit is saved, then the same `JournalEntry` row remains attached, and its note, `rules_followed`, stop and planned risk are unchanged. The only exceptions are fields ADR-0008 locks, and those are read-only on the form, not editable-and-discarded.
-40. Given an edit after which a stored stop sits on the wrong side of the new entry price, then the Avg R card never counts that trade with an invalid R: it is either refused at edit time with a message naming the field, or left out with its reason (`stop_not_a_risk`) shown on the journal page, as ADR-0008 decides. No journal text is lost either way.
+39. Given a trade with a journal entry, when any edit is saved, then the same `JournalEntry` row remains attached, and its note, `rules_followed`, stop and planned risk are unchanged. No field is locked on edit (ADR-0008 §2), so there are no exceptions.
+40. Given an edit after which a stored stop sits on the wrong side of the new entry price or side, then the edit is allowed (user ruling 2026-10-13, ADR-0008 §2) and the Avg R card never counts that trade with an invalid R: the trade is left out with its reason (`stop_not_a_risk`), shown on the journal page after the save. The next journal save on that trade fails on the stop field with `stop_not_a_risk` until the user fixes or clears the stop; the re-render keeps everything the user typed, so no journal text is lost.
 41. Given a closed manual trade, then the exit cannot be removed by blanking it (no reopen). Given the exit time moved earlier than the entry time, then an error.
 42. Given an imported trade (own data), then there is no Edit or Delete control, and a direct request to its edit URL gets the same 404 as a missing id. Imported fills are never writable by this form.
 
@@ -188,7 +188,7 @@ Tests reuse existing vectors; do not invent new formulas. Vectors used: domain v
 
 ## Empty and edge states
 
-- No trades: the empty state offers "Add trade" next to the import path (placement and wording: `ux-designer`). `import-and-list.md` §2 words the empty state around imports only ("No imports at all", "Upload your TopstepX 'Trades' export"), and `design/auth-and-trades-list.md` holds the final copy; both need a manual-entry pass. Not a conflict, a gap for `ux-designer`.
+- No trades: the empty state offers "Add trade" next to the import path (placement and wording: `design/manual-entry.md` 3.2). `import-and-list.md` §2 got its manual-entry pass on 2026-10-13. `design/auth-and-trades-list.md` still holds the older copy until `ux-designer` applies the pass there.
 - Account column: `import-and-list.md` shows the Account column when the user has more than one distinct label. A manual trade's label counts toward that, so adding one labelled manual trade can make the column appear. Intended; no change to the rule.
 - Trade gone between load and save (deleted in another tab): the same 404 as a missing id.
 - Open manual trade left open for days: it stays open and counts nowhere; no nagging, no auto-close.
@@ -232,14 +232,14 @@ Nothing below is decided here; each goes to its owner before build.
 
 **User rulings needed:** none. AC 8 and AC 21 are resolved (third round, `pnl-and-matching.md` §7.1-§7.2, vectors 32/34). The design doc's four spec questions (section 14) are answered here: Close/Account (AC 27), edit of an open trade (AC 29, 38), Fees on add including `0` (AC 29); the fourth, empty-state wording in `import-and-list.md` §2, is a gap (below), not a PM decision.
 
-**Still open (not PM):** ADR-0008 (architect, items below); the `ux-designer` copy for the AC 53 hint and for messages above; the user accepting `design/manual-entry.md`; which extra multiplier roots to verify (`topstep-import.md` §7, user).
+**Still open (not PM):** the `ux-designer` copy for the AC 53 hint and for messages above; the user accepting `design/manual-entry.md`; which extra multiplier roots to verify (`topstep-import.md` §7, user).
 
-**`architect` (write ADR-0008; amends ADR-0003 §4 "immutable by convention", `journal/models.py` `Execution` docstring, `pnl-and-matching.md` §1 NULL-bucket wording via the domain expert, and ADR-0005's "UPDATE that re-points" ceiling note):**
+**`architect` (ADR-0008 is Accepted 2026-10-13 and answers items 1-7 below; kept as the record of what was asked. It amends ADR-0003 §4 "immutable by convention", `journal/models.py` `Execution` docstring, `pnl-and-matching.md` §1 NULL-bucket wording via the domain expert, and ADR-0005's "UPDATE that re-points" ceiling note):**
 1. **Per-manual-trade pairing key.** NULL `broker_trade_id` puts every manual fill for a label+symbol in one FIFO bucket (`journal/matching.py:48`), merging separate manual trades. Each manual trade needs its own key. AC 23 is the observable test. Mind the `execution_broker_trade_id_not_blank` CHECK and that manual keys can never collide with a Topstep `Id`.
-2. **Which fields lock once a journal entry exists** (side, symbol, prices, quantity, point value, time; currency is fixed USD and never edited). Product preference, not a decision: lock as little as possible; the bar is AC 39-40 (journal text never lost, no invalid R counted).
-3. **Stop side re-check on edit:** refuse at edit time, or allow and surface via `r_multiple`'s existing reason `stop_not_a_risk` (AC 40). Currency cannot change on edit, so `risk_currency` cannot go stale from a manual edit.
+2. **Which fields lock once a journal entry exists.** Answered: none (ADR-0008 §2).
+3. **Stop side re-check on edit.** Answered: allow, and surface via `r_multiple`'s `stop_not_a_risk` (AC 40). Currency cannot change on edit, so `risk_currency` cannot go stale from a manual edit.
 4. **Delete order and guard:** journal entry first, then fills, one transaction (RESTRICT FK stays), plus a stale guard for an entry changed after the confirm (AC 46-47).
-5. **Double-submit guard.** Manual fills have no dedupe key, and content-based dedupe is wrong (AC 14). Needs a per-rendered-form token or equivalent.
+5. **Double-submit guard.** Manual fills have no dedupe key, and content-based dedupe is wrong (AC 14). Answered (ADR-0008 §4): a signed token on the add form only; Close, Edit and Delete need none (AC 36).
 6. **Opener stays the entry fill** so the trade id (opening fill pk) survives edit and close: ordering by `(executed_at, id)` with equal times (AC 8) and an exit time never before entry. ADR-0007 §2 says opener-shift orphans "neither exist today" for NULL-key fills; manual entry makes that live unless item 1 closes it.
 7. Endpoint names and URL shapes for add, close, edit, delete (trade id = opening fill pk).
 
@@ -256,7 +256,7 @@ Items 1, 2, 4 and 5 are done in `pnl-and-matching.md` §1, §7 and vectors 24-34
 1. Form layout and field order; the symbol-to-point-value state (known read-only, unknown required, no-JS submit path); whether a "Now" shortcut exists; how the fixed USD currency is shown read-only; the USD-quoted-only hint near Symbol (AC 53); the DST and exit-before-entry messages (AC 8, 21; the draft `TIME_NOT_READABLE` must cover both the nonexistent and the ambiguous case).
 2. "Add trade" placement on `/trades/` and in the empty state; post-save destination and flash.
 3. "Close this trade": where it lives (row, journal page, or both), the close form.
-4. Edit and delete flows, including locked-field presentation (ADR-0008) and a delete dialog that reads like the import delete dialog (ADR-0005, `design/journaling.md` §7).
+4. Edit and delete flows (no locked fields, ADR-0008 §2) and a delete dialog that reads like the import delete dialog (ADR-0005, `design/journaling.md` §7).
 5. Edit/Delete visible only on manual trades without creating a visual caste system in the list.
 6. Mobile layout; copy tone (coach, no price comments).
 

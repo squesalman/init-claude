@@ -74,8 +74,9 @@ B, concretely:
   safe). Inside the transaction, an entry in the batch with `updated_at` later than that
   value is not deleted, so the "anything left?" check raises `StaleConfirm` and the transaction rolls back
   everything (as built in J2; see the ADR-0007 amendment).
-  Known ceiling: an UPDATE that re-points an older entry into the batch (ADR-0003 manual correction,
-  not built) is not caught by max pk. When that ships, sign a hash of the sorted shown pk set instead.
+  The re-pointing ceiling is closed by ADR-0008: manual edits update fills in place and never re-point a
+  journal entry, and manual fills belong to no batch. Nothing re-points an entry today. (Still open: a lower
+  pk committing after a higher one, `services.py` ponytail (b).)
 
 Why B satisfies "never lose writing silently": the loss is counted, named, listed, and needs a
 deliberate extra action. Why B fits "journaling friction is the top risk": the common case (no

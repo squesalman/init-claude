@@ -1,6 +1,6 @@
 # ADR-0004: Topstep import: per-account dedupe key and per-row trade pairing
 
-- **Status:** Accepted
+- **Status:** Accepted; §3 bucket key amended by [ADR-0008](0008-manual-entry.md)
 - **Date:** 2026-09-26
 - **Deciders:** architect (proposed), user (approved 2026-09-26: "fail, accepted, yes")
 - **Amends:** [ADR-0003](0003-data-model.md) §4 (dedupe index, one new column), §3 (one new
@@ -87,14 +87,16 @@ reports **closed round-trips** (Topstep's `Id`), the importer sets it on both sy
 `derive_trades()` runs the **existing FIFO routine unchanged**, scoped per:
 
 ```
-(user, broker_account_label, symbol, broker_trade_id)   -- NULL broker_trade_id = one shared bucket
+(user, broker, broker_account_label, symbol, broker_trade_id)   -- NULL broker_trade_id = one shared bucket per broker (ADR-0008 §1)
 ```
 
 - A Topstep row's two legs form their own bucket. Size in equals size out, so they produce exactly
   one closed trade, opened by that row's `:entry` execution. Overlapping rows can no longer bleed
   into each other.
-- Manual entries and any future **fill-only** importer leave `broker_trade_id` NULL. They get plain
-  FIFO per `(account, symbol)`, exactly as `pnl-and-matching.md` §1 specifies. No second code path.
+- A future **fill-only** importer leaves `broker_trade_id` NULL. Its fills get plain FIFO per
+  `(broker, account, symbol)`, exactly as `pnl-and-matching.md` §1 specifies. Manual entries carry a generated
+  key per trade (`manual:<32 hex>`, ADR-0008 §1), so each manual trade is its own bucket and never pairs with
+  another trade. No second code path.
 - An unbalanced group (should not happen, because the importer writes both legs of a row in one
   transaction) falls out of FIFO as an open trade. It stays visible and is never dropped or raised
   on the read path.

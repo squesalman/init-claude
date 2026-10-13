@@ -57,7 +57,7 @@ Indexes needed by the new queries all exist already (no index work):
 |---|---|
 | Same file re-imported | Every row is `skipped_duplicate` and no execution changes, so every entry stays attached. |
 | Different contents under the same Id | `skipped_conflict`. Executions are immutable, so the trade's currency, price and lots can't change underneath an entry through import. |
-| Re-match that shifts an opener (only possible for `broker_trade_id = NULL` fills: manual or fill-only, and neither exists today) | The entry is orphaned: it drops out of the list, the stats and the journal URL (404), but it still counts in the delete dialog because it is attached to that batch's execution. ADR-0003 accepted this, and the spec puts orphan detection out of scope. Topstep trades can't shift, because each row is its own bucket (ADR-0004 §3). |
+| Re-match that shifts an opener (only possible for `broker_trade_id = NULL` fills from a future fill-only importer, which doesn't exist yet. Manual trades can't shift: each has its own key, the exit is never before the entry, and on equal times the entry fill has the lower pk, ADR-0008 §1) | The entry is orphaned: it drops out of the list, the stats and the journal URL (404), but it still counts in the delete dialog because it is attached to that batch's execution. ADR-0003 accepted this, and the spec puts orphan detection out of scope. Topstep trades can't shift, because each row is its own bucket (ADR-0004 §3). |
 | Delete import | ADR-0005, unchanged except for the stale-guard amendment in §7. Entries go only behind the counted checkbox. |
 | `risk_currency_mismatch` | Import can't change a trade's currency today (see the rows above), so this reason can only come from legacy rows or a future correction flow. It is still implemented and tested (vectors 11, 22), because the domain requires the backstop. |
 
@@ -320,8 +320,8 @@ J2 and J3 run in sequence, not in parallel, because both touch the same template
 
 - **Positive:** no new tables, no new dependencies, one R implementation for three callers, the tenant
   rules unchanged, one small additive migration.
-- **Accepted:** orphaned entries (from a shifted opener) are invisible, except in the delete dialog. Only
-  non-Topstep fills can produce them, and none exist yet.
+- **Accepted:** orphaned entries (from a shifted opener) are invisible, except in the delete dialog. Only a
+  future fill-only importer's NULL-key fills can produce them; manual trades can't (ADR-0008 §1).
 - **Accepted:** without JS, a rules save loses unsaved journal-form text (design 3.2).
 - **Accepted:** if two tabs save the same entry, the last one wins, with no merge and no message (spec AC 8).
 - **Accepted:** `/trades/` gains one query and an O(trades) R pass.

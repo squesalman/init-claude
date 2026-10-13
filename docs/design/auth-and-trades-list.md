@@ -211,7 +211,7 @@ Full width of the shell (max about 1200px), 24px gutters.
 
 ```
 +--------------------------------------------------------------------------------------+
-| Trades                                                        [ Import trades ]      |
+| Trades                                        [ Import trades ]  [ Add trade ]       |
 |                                                                                      |
 | +---------------------+ +---------------------+ +----------------------------------+ |
 | | Win rate            | | Total P&L           | | Avg R                            | |
@@ -267,6 +267,7 @@ Cards replace the table (from the same data; table is `hidden sm:block`, the lis
 +--------------------------------------+
 | Trades                               |
 | [ Import trades ]  (full width)      |
+| [ Add trade ]      (full width)      |
 |                                      |
 | Win rate       60.00% (n=5)          |
 | Excludes 2 breakeven trades.         |
@@ -295,7 +296,8 @@ Cards replace the table (from the same data; table is `hidden sm:block`, the lis
 
 - Line 1: symbol, side in words, signed P&L right-aligned. Line 2: Result icon + word. Line 3: opened time; zone name shown once above the list ("Times in America/New_York"), not per card. Line 4: duration, quantity, entry to exit. Account line only under decision 11.
 - Sort control on mobile is a labelled `<select>` inside a GET form with an "Apply" button (native, no JS; Alpine may auto-submit on change). Options: Newest opened, Oldest opened, Symbol A to Z, Symbol Z to A, Highest P&L, Lowest P&L.
-- Stat cards stack in one column, compact (label and value-with-n on one line). 44px targets for Apply and the import button.
+- Stat cards stack in one column, compact (label and value-with-n on one line). 44px targets for Apply and the import and add buttons.
+- Manual entry (2026-10-13): "Add trade" is a secondary button after "Import trades" in the header, links to `/trades/new/`. Layout, empty states and copy: [`manual-entry.md`](manual-entry.md) 3.1, 3.2.
 - Text scales to 200% without horizontal scroll.
 
 ### 5.3 Multi-account
@@ -314,13 +316,14 @@ Cards replace the table (from the same data; table is `hidden sm:block`, the lis
 | Trades                                                                   |
 |                                                                          |
 |   No trades yet                                                          |
-|   Upload your TopstepX 'Trades' export and your trades show up here.     |
+|   Upload your TopstepX 'Trades' export, or add a trade by hand. Your     |
+|   trades show up here.                                                   |
 |                                                                          |
-|   [ Import trades ]                                                      |
+|   [ Import trades ]  [ Add trade ]                                       |
 +--------------------------------------------------------------------------+
 ```
 
-- Button links to `/imports/`. It is the one and only action on the page (manual entry does not exist in slice 1, so there is no "add by hand" option or link).
+- "Import trades" (primary) links to `/imports/`; "Add trade" (secondary) links to `/trades/new/`. Two actions since manual entry shipped (user rulings 2026-10-13; ADR-0008). Body copy `TRADES_EMPTY_BODY` and state B: [`manual-entry.md`](manual-entry.md) 3.2.
 
 **B. Has imports, but none produced a trade** (every row was skipped or failed).
 
@@ -330,7 +333,7 @@ Cards replace the table (from the same data; table is `hidden sm:block`, the lis
 |   [ See what happened to that upload ]   -> that import's detail page    |
 ```
 
-Same heading as A; body and link per PM spec §2.
+Same heading as A; body and link per PM spec §2. A secondary "Add trade" button sits beside the link (`manual-entry.md` 3.2).
 
 **C. Only open trades** (no closed trades yet). Table shows the open rows. Cards render their n=0 strings:
 
@@ -480,7 +483,7 @@ Settings: `LOGIN_URL="/login/"`, `LOGIN_REDIRECT_URL="/trades/"`, `LOGOUT_REDIRE
 
 - Former Q1, story 6 scope: no filters in slice 1, no pagination (decisions 12, 13).
 - Former Q2, rate limiting and enumeration: signup leak accepted for now, login throttling deferred (decision 14).
-- Former Q4, manual entry page: does not exist in slice 1; the empty state has no "add by hand" option (5.4). The import doc's own empty state (`import-account-label.md`) had the same option; removed 2026-09-26.
+- Former Q4, manual entry page: did not exist in slice 1, so the empty state had no "add by hand" option (removed 2026-09-26). **Superseded 2026-10-13** by [`manual-entry.md`](manual-entry.md) (ADR-0008): "Add trade" is now on the header and in empty states A and B (5.1, 5.4). The imports page stays import-only.
 - Former Q6, wrong time zone at signup: visible prefilled field stays (decision 6). A settings screen remains out of scope.
 
 ### Open questions

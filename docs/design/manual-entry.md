@@ -1,7 +1,7 @@
 # Design: manual trade entry (add, close, edit, delete)
 
-Spec: [`manual-entry.md`](../product/features/manual-entry.md) (product; 52 ACs plus 12a; user rulings 2026-10-13 are final). Layout, tokens, `Notice`, `FormField`, error-summary and tone conventions: [`auth-and-trades-list.md`](auth-and-trades-list.md) (4.3, 5, 7, 8). Page pattern, radio tiles, `details` disclosures, sticky action bar, `charCounter`/`data-busy`: [`journaling.md`](journaling.md) (3, 8, 12a). Delete dialog, Account datalist, tone: [`import-account-label.md`](import-account-label.md) (3.1, 3.3, 5, 7). Where this doc and the merged code differ on conventions, follow the merged code (follow-ups rows 42, 43).
-Status: **Draft for `frontend-engineer`.** Not buildable until ADR-0008 is Accepted and the PENDING items in section 14 are ruled. Everything marked **[ADR-0008]** or **[PENDING]** is a slot, not a decision. Route and endpoint names are placeholders (ADR-0008 item 7 owns them).
+Spec: [`manual-entry.md`](../product/features/manual-entry.md) (product; 53 ACs; user rulings 2026-10-13 are final). Decisions: [ADR-0008](../adr/0008-manual-entry.md) (Accepted). Layout, tokens, `Notice`, `FormField`, error-summary and tone conventions: [`auth-and-trades-list.md`](auth-and-trades-list.md) (4.3, 5, 7, 8). Page pattern, radio tiles, `details` disclosures, sticky action bar, `charCounter`/`data-busy`: [`journaling.md`](journaling.md) (3, 8, 12a). Delete dialog, Account datalist, tone: [`import-account-label.md`](import-account-label.md) (3.1, 3.3, 5, 7). Where this doc and the merged code differ on conventions, follow the merged code (follow-ups rows 42, 43).
+Status: **Accepted (user, 2026-10-13).** Buildable. Build order: `backend-engineer` (PR M2) first ships working unstyled templates plus every context key in section 13; `frontend-engineer` (PR M3) then makes them design-complete. M3's scope is ADR-0008 §5 (routes, ownership) plus the "frontend deliverables" list in section 15, and nothing else. Route names are final (ADR-0008 §5): `/trades/new/` (`trade_add`), `/trades/point-value/` (`trade_point_value`), `/trades/<pk>/close/` (`trade_close`), `/trades/<pk>/edit/` (`trade_edit`), `/trades/<pk>/delete/` (`trade_delete`); `<pk>` is always the opening fill's id.
 
 Aim: a trader logs an open trade in about 20 seconds (five inputs, one tap on Save), and fixing or removing a manual trade is never scary.
 
@@ -18,10 +18,10 @@ Aim: a trader logs an open trade in about 20 seconds (five inputs, one tap on Sa
 | Currency | Never an input. Prices and Fees carry a fixed "USD" suffix (`field.html` `suffix`, `aria-hidden`) and say "in USD" in their help text. The intro line says amounts are in US dollars. Because the app cannot tell a USD-quoted symbol from another, a one-sentence hint sits under the Symbol field on add and edit (not close): `SYMBOL_CURRENCY_HINT`, section 4.2. User ruling 2026-10-13 ("hint and go"); non-USD waits on follow-ups row 45 plus a minor-unit rounding table. |
 | Point value (no JS) | Initial render shows no input, only a muted line: it is worked out from the symbol on save. Known root: a read-only `<dl>` row (not a disabled input). Unknown root: re-render at 200 with the required empty input and an error in the summary. The server never shows an editable box for a known root. |
 | Point value (htmx, optional) | `change` on Symbol swaps `#point-value` with the right state. Full-page submit works identically without it. |
-| Fees on add **[PENDING PM, section 14 item 3]** | Always offered (without JS the server cannot know whether an exit will exist). Help says it is only used with an exit. Fees with no exit gives a field error. This departs from AC 29's "no Fees input is offered" on an open trade, which only holds for edit-open and close. |
+| Fees on add (AC 29) | Always offered (without JS the server cannot know whether an exit will exist). Help says it is only used with an exit. Any non-blank Fees (including `0`) with no exit gives a field error. Edit-open offers no Fees input. |
 | Open trade | Shown everywhere as today ("Open"). Manual open trades get "Close this trade" on the journal page. No nagging, no reminder. |
-| Close **[PENDING PM, section 14 item 1]** | Own page `/trades/<id>/close/`: exit price, exit time, size read-only, Fees in More details. Account label is shown read-only in the trade header and is not editable: AC 27 says More details on close holds Fees and Account label, but AC 34 copies the label onto the exit fill and the label is part of the matcher bucket. |
-| Edit | Same form, prefilled, times in the user's zone. Open trade: no exit, no Fees, a link to Close. Closed trade: exit required. Locked fields render as read-only text with a reason line **[ADR-0008 slot, section 7.2]**. |
+| Close (AC 27, 34) | Own page `/trades/<id>/close/`: exit price, exit time, size read-only, Fees in More details. Account label is shown read-only in the trade header and is not editable: the label is part of the matcher bucket and is copied onto the exit fill from the entry fill. |
+| Edit | Same form, prefilled, times in the user's zone. Open trade: no exit, no Fees, a link to Close. Closed trade: exit required. **No field is ever locked** (ADR-0008 §2): every edit writes all of the trade's legs, so the journal entry stays attached whatever changes. |
 | Delete | Same dialog shell and `deleteConfirm` behavior as import delete, sibling partial. Tick box only when a journal entry exists. The entry is shown in full. |
 | Entry points | "Add trade" on `/trades/` header (secondary button beside "Import trades") and in both empty states. Edit, Close, Delete live only in the journal page header, for manual trades. List rows stay identical for every trade: no new per-row tab stop, no badge. |
 | After save | Add and Edit and Close land on the trade's journal page with a flash (the journal is the point). Delete lands on `/trades/` with a flash. |
@@ -43,7 +43,7 @@ Aim: a trader logs an open trade in about 20 seconds (five inputs, one tap on Sa
 
 /trades/<id>/journal/  (manual trades only: Close this trade | Edit trade | Delete trade)
    |-- Close this trade (open only) -> /trades/<id>/close/ -> POST ok -> 302 journal page + flash "Trade closed."
-   |        already closed (other tab) -> 302 journal page + info flash "That trade was already closed..."
+   |        already closed (other tab or double submit; no token on Close) -> 302 journal page + info flash "That trade was already closed..."
    |-- Edit trade   -> /trades/<id>/edit/  -> POST ok -> 302 journal page + flash "Trade updated."
    `-- Delete trade -> dialog (htmx) or /trades/<id>/delete/ (no JS)
                          POST ok -> 302 /trades/ + flash "Trade deleted." / "Trade and journal entry deleted."
@@ -167,7 +167,7 @@ More details open:
 | Field (`name`) | Control | Attributes | Server notes |
 |---|---|---|---|
 | Symbol (`symbol`) | `type="text"` | `autocomplete="off"`, `autocapitalize="characters"`, `spellcheck="false"`, `aria-required`, no `maxlength` (a native cap silently cuts pastes), `autofocus` on a fresh GET with no errors | Trim, uppercase, 32 max (AC 11). Re-rendered value is the normalized one. |
-| Symbol currency hint (no `name`, not a field) | `<p id="id_symbol_currency_hint" class="mt-1 text-text-muted">` directly under the Symbol help line, before any error message | Same style as every other help line (muted token, AA contrast, no icon, no border, not a `Notice`). Static `SYMBOL_CURRENCY_HINT`, always visible: not collapsed, not dismissible, not a tooltip, not a live region, not in the error summary, and not cleared or changed by an error re-render. Shown on **add and edit**; **not on close** (no Symbol input there). On edit it is omitted when `symbol` is in `locked_fields` (7.2): no input, nothing to describe. The Symbol input's `aria-describedby` lists, in order: help id, hint id, error id (same help-then-error convention as 10.2). `field.html` renders one `help_text` paragraph today, so give it an optional `hint` / `hint_id` parameter (second `<p>`), and have the form add the hint id to the widget's `aria-describedby` (Django only emits the help and error ids). Backend only passes `mode`; no new context key. |
+| Symbol currency hint (no `name`, not a field) | `<p id="id_symbol_currency_hint" class="mt-1 text-text-muted">` directly under the Symbol help line, before any error message | Same style as every other help line (muted token, AA contrast, no icon, no border, not a `Notice`). Static `SYMBOL_CURRENCY_HINT`, always visible: not collapsed, not dismissible, not a tooltip, not a live region, not in the error summary, and not cleared or changed by an error re-render. Shown on **add and edit**; **not on close** (no Symbol input there). The Symbol input's `aria-describedby` lists, in order: help id, hint id, error id (same help-then-error convention as 10.2). `field.html` renders one `help_text` paragraph today, so give it an optional `hint` / `hint_id` parameter (second `<p>`), and have the form add the hint id to the widget's `aria-describedby` (Django only emits the help and error ids). Backend only passes `mode`; no new context key. |
 | Side (`side`) | fieldset + 2 radios | legend "Side", help tied by `aria-describedby`; no `checked` | Required. Long = buy entry. |
 | Quantity (`quantity`) | `type="text"` | `inputmode="decimal"`, `autocomplete="off"`, `autocapitalize="none"`, `spellcheck="false"`, `aria-required` | `PlainDecimalField` rules (AC 9, 10). |
 | Entry price (`entry_price`) | same, with `suffix=USD` | same | Non-zero; negative allowed. |
@@ -176,7 +176,7 @@ More details open:
 | Exit price / time (`exit_price`, `exit_time`) | as entry | not `aria-required` on add | Both or neither (AC 7). |
 | Fees (`fees`) | `type="text"`, `suffix=USD` | `inputmode="decimal"` | 0 or more, 4 dp; blank = 0. |
 | Account (`account`) | text + datalist | as the import Account input, blank by default | Max 64, trimmed, control characters rejected (existing copy). |
-| Hidden `form_token` | per-render token | | Double-submit guard (ADR-0008 item 5). |
+| Hidden `form_token` (add form only) | signed token, rendered once per GET | | Double-submit guard and the trade's pairing key (ADR-0008 §1, §4). Never on Close or Edit. A validation re-render keeps the posted token if it is valid; a bad or missing token writes nothing and re-renders with a fresh one and `MANUAL_SAVE_FAILED`. |
 | Hidden `pv_for` | normalized symbol the Point value input was rendered for | only present in the unknown-root state | See 5.3. |
 
 Known ceiling: `inputmode="decimal"` has no minus key on iOS, though negative prices are valid (AC 9). Same ceiling as the journal stop field; those users can paste or use a hardware keyboard.
@@ -223,11 +223,11 @@ A value typed for one symbol must not be saved for another (1 on `AAPL` then `ES
 
 ### 5.4 htmx enhancement (optional; everything above still works without it)
 
-- On the Symbol input: `hx-get="{% url 'trade_point_value' %}"` (placeholder, ADR-0008 item 7), `hx-trigger="change"`, `hx-target="#point-value"`, `hx-swap="outerHTML"`, `hx-sync="this:replace"`. The request carries the input's own `symbol`; edit passes nothing else.
+- On the Symbol input: `hx-get="{% url 'trade_point_value' %}"` (`/trades/point-value/`, ADR-0008 §5), `hx-trigger="change"`, `hx-target="#point-value"`, `hx-swap="outerHTML"`, `hx-sync="this:replace"`. The request carries the input's own `symbol`; edit passes nothing else.
 - The response is `point_value.html` for the new state plus an out-of-band update of a persistent `<p id="point-value-live" role="status" class="sr-only" hx-swap-oob="innerHTML">` (the swapped block is replaced wholesale, so it cannot announce itself; `innerHTML`, not `true`, so only the text changes and the live region element itself persists). Live text: `POINT_VALUE_LIVE_KNOWN`, `POINT_VALUE_LIVE_ASK`, or empty for `pending`.
 - Do **not** set `data-focus-after-swap` and do not move focus: the user is already on Side. A keyboard user who tabs away before the swap lands is told by the live region; if they miss it, the submit path above catches it.
 - A blank symbol swaps back to `pending`.
-- Expired session: this endpoint returns 401 **without** `HX-Redirect` (an exception to auth design 9 note 1), so htmx ignores it and the typed form is not thrown away; the later Save redirects to login as for any form.
+- Expired session: this endpoint returns a bare 401 **without** `HX-Redirect` (an exception to auth design 9 note 1; it can't use `htmx_login_required`, ADR-0008 §5), so htmx ignores it and the typed form is not thrown away; the later Save redirects to login as for any form.
 - Any network error: nothing changes; no error shown (the submit path is the fallback).
 
 ---
@@ -272,8 +272,8 @@ An open manual trade looks like any open trade: "Open" badge, P&L "Open", no exi
 
 - Fields: `exit_price` and `exit_time` both required (`aria-required`), Fees in More details. No quantity input, no side, no point value, no account input.
 - GET on a trade that is already closed: no form; 302 to the journal page with the info flash `ALREADY_CLOSED`. Imported trade or not found: the one 404.
-- POST of the same rendered form twice: second returns the same redirect as the first (`form_token`). POST from a different render after the trade closed: no second fill, info flash `ALREADY_CLOSED`.
-- Exit before entry **[PENDING AC 8/35]**: error under Exit time `EXIT_BEFORE_ENTRY`, which names the entry time, so the user does not need to scroll up.
+- **No `form_token` on Close** (user ruling, AC 36; ADR-0008 §4). The server decides from the locked rows: if the trade already has an exit, no second fill is written and the response is a 302 to the journal page with the info flash `ALREADY_CLOSED`. This covers a double submit (Back then resubmit, or a double click without JS) and a second tab alike. The target is the same page as a first success; only the flash differs.
+- Exit before entry (AC 8, 35): error under Exit time `EXIT_BEFORE_ENTRY`, which names the entry time, so the user does not need to scroll up. Equal times are allowed (domain §7.1).
 
 ---
 
@@ -285,24 +285,30 @@ Title "Edit {symbol}". Same page frame as add. Intro `EDIT_INTRO`. When a journa
 
 | Trade | Visible fields |
 |---|---|
-| Open **[PENDING PM, section 14 item 2]** | Symbol, Point value, Side, Quantity, Entry price, Entry time, More details (**Account only, no Fees**). In place of the exit group: a muted line `EDIT_OPEN_NOTE` with a link "Close this trade" to the close page. No exit inputs (AC 38: an edit never adds a fill). Derived from AC 29 and AC 38; the spec does not say it in so many words. |
+| Open | Symbol, Point value, Side, Quantity, Entry price, Entry time, More details (**Account only, no Fees**). In place of the exit group: a muted line `EDIT_OPEN_NOTE` with a link "Close this trade" to the close page. No exit inputs (AC 29, 38: an edit never adds a fill; a tampered POST naming them writes nothing). |
 | Closed | Everything in add, with the exit pair **required** (legend "Exit", no "(optional)", no "leave blank" help). More details opens when fees are above 0 or the account label is non-blank (stored fees are `0.0000` by default, which must not count as "set"). A blank exit gives `EXIT_PRICE_REQUIRED_CLOSED` / `EXIT_TIME_REQUIRED_CLOSED`: a closed trade cannot be reopened (AC 41). |
 
 Point value follows section 5 with the real state from the first render. Changing the symbol to a different known/unknown status re-evaluates on save (AC 19), including the `pv_for` guard.
 
-### 7.2 Locked fields **[ADR-0008 slot]**
+### 7.2 No locked fields (ADR-0008 §2)
 
-ADR-0008 decides which fields lock once a journal entry exists. Presentation, so the decision is a data change only:
+Nothing locks, with or without a journal entry. Every edit writes all of the trade's legs in one transaction (shared fields to every leg, price and time per leg), so the entry fill stays the opener and the journal entry stays attached (AC 39). There is no read-only row for a journal-locked field, no reason line, and no `locked_fields` key. The only read-only rows on these forms are the known Point value and Size.
 
-- Context key `locked_fields`: a set of field names. A locked field renders as the same read-only `<dl>` row used for a known Point value (label, current value in the user's formats, no input, nothing posted), followed by the reason line `LOCKED_REASON`, tied to the row with `aria-describedby`.
-- Locked rows keep their position in the form. Nothing is "editable then discarded" (AC 39).
-- Proposed `LOCKED_REASON` (final wording waits for the ADR): "Locked because this trade has a journal entry."
-- If ADR-0008 locks nothing, the key is an empty set and no UI changes.
+- Editable on every manual trade: Symbol, Side, Quantity, Entry price, Entry time, Point value (input only when the root is unknown), Account. Closed trades add Exit price, Exit time and Fees.
+- **Unchanged time field (AC 21):** the form posts the time exactly as rendered (`YYYY-MM-DDTHH:MM` in the user's zone). A field still equal to its rendered value keeps the stored instant and skips the DST and future checks, so a trade saved before a zone change stays editable. Only a changed field is parsed and checked. No UI for this.
+- **Edit versus Close race (rare):** an open-trade edit form posted after another tab closed the trade writes the new shared fields to both legs. If the new entry time is later than that exit, nothing is saved and `EXIT_BEFORE_ENTRY` shows under Entry time. Accepted wording (ADR-0008 §2).
 
-### 7.3 Stop side re-check **[ADR-0008 slot, AC 40]**
+### 7.3 Stop left on the wrong side after an edit (AC 40, user ruling 2026-10-13)
 
-- Option (a), refused at edit time: field error under Entry price (or Side): `STOP_RECHECK_REFUSED`. Nothing saved, values kept.
-- Option (b), allowed: no new copy. The journal page's existing risk status line (`R_STATUS_STOP_NOT_A_RISK`) explains it after the redirect.
+The edit is allowed. Nothing blocks or warns on the edit page, and there is no new copy; the existing journal copy carries it:
+
+| Moment | What the user sees | Copy |
+|---|---|---|
+| Save the edit | Normal 302 to the journal page, flash `TRADE_UPDATED`. | existing |
+| Journal page after the redirect | The risk status line explains why the trade is out of Avg R. The stop field stays prefilled. The trade moves into the Avg R card's "Left out" count (AC 40). | `R_STATUS_STOP_NOT_A_RISK` (`journal/copy.py`) |
+| Next journal save on that trade, planned risk blank | The save fails on the stop field. Everything typed is kept (no journal text lost), including the note. The user changes or clears the stop, or enters a planned risk amount, then saves. | `STOP_WRONG_SIDE` (`journal/copy.py`, existing field error) |
+
+Tone: neutral, in the place the stop lives. No alert styling, no "your edit broke something" wording. Frontend adds nothing to the edit form for this.
 
 ---
 
@@ -388,9 +394,11 @@ An open trade says `MANUAL_DELETE_BODY_OPEN` ("This removes this open trade from
 | Unknown point value | Same as validation error; the Point value input is now present, empty, with `POINT_VALUE_NEEDED`. |
 | Save failure (DB, cross-tenant form error) | 200, values kept, `attention` Notice at the top, focused: `MANUAL_SAVE_FAILED`. Never a bare 500. |
 | Submitting | Save button "Saving...", disabled (existing `data-busy`; restored on `pageshow`). |
-| Double submit | JS on: button disabled. Same token twice (Back then resubmit, no JS double click): second request ends on the same redirect and flash as the first. Two separate renders with identical content: two trades (AC 14). |
+| Double submit (add) | JS on: button disabled. Same signed token twice (Back then resubmit, no JS double click): the second request ends on the same redirect and flash as the first, and no second trade is written. Values changed after Back are ignored (the journal page shows what was saved; Edit fixes it). Two separate renders with identical content: two trades (AC 14). A bad or missing token: nothing written, 200 re-render with a fresh token and `MANUAL_SAVE_FAILED`. |
 | Saved | 302 + flash (section 12), focus on the flash. |
-| Close: already closed | 302 to the journal page, info flash `ALREADY_CLOSED`. |
+| Close: already closed (double submit or second tab; no token) | 302 to the journal page, info flash `ALREADY_CLOSED`. |
+| Edit leaves a stop on the wrong side | Saves normally; the journal page then shows `R_STATUS_STOP_NOT_A_RISK`, and the next journal save fails on the stop field with `STOP_WRONG_SIDE` until it is changed or cleared (7.3). |
+| Edit: new entry time after an exit added in another tab | Nothing saved; `EXIT_BEFORE_ENTRY` under Entry time (7.2). |
 | Loading | Server-rendered, no skeleton. |
 | Not found / foreign / imported | The one 404. |
 | Session expired | POST redirects to `/login/?next=<form url>`; typed values are lost (same as every form, no autosave). |
@@ -417,7 +425,7 @@ Skip link, nav, Back link, (error summary or flash when present, focused on load
 - Errors: summary + per-field message with decorative icon, `aria-invalid="true"`, `aria-describedby` (help id then error id), no "Error:" prefix, no `role="alert"`. The summary links to field ids; Side's link targets the tile container id (`id_side`). Errors inside a closed More details open it.
 - The USD suffix is `aria-hidden`; the help text says "in USD".
 - Symbol's `aria-describedby` = help id, `id_symbol_currency_hint`, then the error id when present, so a screen reader hears the hint on focus.
-- Read-only values (known Point value, Size, locked fields) are `<dl>` rows, not disabled inputs, so they are readable and reachable by screen readers and cannot be mistaken for editable fields.
+- Read-only values (known Point value, Size) are `<dl>` rows, not disabled inputs, so they are readable and reachable by screen readers and cannot be mistaken for editable fields.
 - Live regions: `#point-value-live` (htmx path), the "Use current time" status. Neither speaks on every keystroke.
 - Date/time: native `datetime-local` is keyboard and screen-reader operable; the zone is in the help text, tied by `aria-describedby`.
 - P&L and results in the journal header keep sign + word + icon. Nothing on these forms encodes meaning by color alone.
@@ -434,10 +442,10 @@ Skip link, nav, Back link, (error summary or flash when present, focused on load
 1. **Symbol with surrounding spaces or lower case:** stored trimmed and uppercase; re-render shows the normalized value.
 2. **`MNQZ6`, `ESZ6`, `GC...`:** unknown today, so the user types the point value (they know it). Verified roots grow only via the importer table.
 3. **Symbol edited after an error re-render** that already showed the point value: `pv_for` guard (5.3).
-4. **Fees on add with no exit [PENDING PM]:** field error `FEES_NEEDS_EXIT`; the More details panel opens so the message is reachable.
-5. **Entry equals exit time:** saves (AC 8). Exit earlier: error **[PENDING]**.
-6. **Future time:** error `TIME_FUTURE`. "Use current time" never triggers it (floored).
-7. **Nonexistent or repeated local time (DST):** rejected for now with `TIME_NOT_READABLE` **[PENDING AC 21]**.
+4. **Fees on add with no exit:** field error `FEES_NEEDS_EXIT` for any non-blank value (including `0`); the More details panel opens so the message is reachable.
+5. **Entry equals exit time:** saves (AC 8). Exit earlier: `EXIT_BEFORE_ENTRY` (compared in UTC).
+6. **Future time:** error `TIME_FUTURE` (five minutes of grace for a fast browser clock, ADR-0008 §6). "Use current time" never triggers it (floored).
+7. **Nonexistent or repeated local time (DST):** rejected with `TIME_NOT_READABLE` (AC 21). The zone shown in the help text is the zone the server parsed with, including the UTC fallback if the stored name is bad.
 8. **Very long symbol or account:** `break-all` / `break-words`, escaped everywhere.
 9. **Two tabs:** edit saved in one, stale form saved in the other: last write wins (same as the journal, no message). Delete in one tab, anything in the other: the one 404.
 10. **Edit changes known/unknown point value:** re-evaluated on save (AC 19); journal entry kept (AC 39).
@@ -540,8 +548,8 @@ Name check: a grep of both `copy.py` files found no clash with the new keys belo
 | ENTRY_TIME_REQUIRED | Enter when you entered the trade. |
 | TIME_INVALID | Enter a date and time like 2026-03-02 09:30. (an unparseable entry or exit time, e.g. the text fallback) |
 | TIME_FUTURE | That time hasn't happened yet in {zone}. Check the date, time and time zone. |
-| TIME_NOT_READABLE **[PENDING AC 21]** | We couldn't use that time in {zone}. Check the date and time, then try again. |
-| EXIT_BEFORE_ENTRY **[PENDING AC 8/35]** | The exit time can't be before the entry time ({entry}). |
+| TIME_NOT_READABLE | We couldn't use that time in {zone}. Check the date and time, then try again. |
+| EXIT_BEFORE_ENTRY | The exit time can't be before the entry time ({entry}). (Under Exit time; in the edit-versus-close race it is shown under Entry time, same string.) |
 | POINT_VALUE_NEEDED | We don't have a point value for {symbol} yet. Enter one; for shares, use 1. |
 | POINT_VALUE_NOT_NUMBER | Enter a number like 1000. Use a period for decimals. |
 | POINT_VALUE_NOT_POSITIVE | Point value needs to be more than 0. |
@@ -552,7 +560,8 @@ Name check: a grep of both `copy.py` files found no clash with the new keys belo
 | FEES_NEEDS_EXIT | Fees apply once a trade is closed. Add an exit, or clear Fees. |
 | NUMBER_TOO_LARGE | That number is too large. (existing key) |
 | ACCOUNT_TOO_LONG, ACCOUNT_CONTROL_CHARACTERS | Existing keys, reused. |
-| STOP_RECHECK_REFUSED **[ADR-0008 item 3, option (a) only]** | Your saved stop ({stop}) would sit on the wrong side of this entry price. Change the stop in the journal first, or choose a different price. |
+
+No `STOP_RECHECK_REFUSED`: a stop on the wrong side after an edit is allowed (7.3). The words come from existing keys, no new key: `R_STATUS_STOP_NOT_A_RISK` ("Your saved stop isn't on the loss side of this trade's entry price, so it's left out of Avg R.") on the journal page after the save, and `STOP_WRONG_SIDE` ("Your stop should sit on the loss side of your entry price.") on the next journal save that leaves planned risk blank. Both in `journal/copy.py`.
 
 ### Flashes and notices
 
@@ -561,14 +570,8 @@ Name check: a grep of both `copy.py` files found no clash with the new keys belo
 | TRADE_ADDED | success | Trade added. Journal it now, or come back later. |
 | TRADE_CLOSED | success | Trade closed. |
 | TRADE_UPDATED | success | Trade updated. |
-| ALREADY_CLOSED | info | That trade was already closed, so nothing was added. |
-| MANUAL_SAVE_FAILED | attention Notice | We couldn't save that just now. Your entries are still here, so try again in a moment. |
-
-### Locked fields **[ADR-0008 slot]**
-
-| Key | String |
-|---|---|
-| LOCKED_REASON | Locked because this trade has a journal entry. (proposed; final wording after the ADR) |
+| ALREADY_CLOSED | info | That trade was already closed, so nothing was added. (Close double submit or second tab, AC 36.) |
+| MANUAL_SAVE_FAILED | attention Notice | We couldn't save that just now. Your entries are still here, so try again in a moment. (Also used for a bad or missing add-form token.) |
 
 ### Delete
 
@@ -604,7 +607,7 @@ Import delete body: no change. "Your other imports stay as they are." stays; man
 | `PointValue` (`partials/point_value.html`) | The three states; the htmx swap target; plus the OOB live region. |
 | `SideTiles` (`partials/side_tiles.html`) | Copy of `rules_question.html` structure with Long/Short and arrow icons. |
 | `TimeField` (`partials/time_field.html`) | `field.html` + help + `nowButton` hook. |
-| `ReadOnlyValue` (`partials/readonly_value.html`) | `<dl>` row: label, value, optional help. Used by Point value (known), Size, locked fields. |
+| `ReadOnlyValue` (`partials/readonly_value.html`) | `<dl>` row: label, value, optional help. Used by Point value (known) and Size. |
 | `TradeActions` (`partials/trade_actions.html`) | 3.3. |
 | `TradeDeleteConfirm` (`partials/trade_delete_confirm.html`, page `trade_delete.html`) | 8. |
 | `AccountInput` (`partials/account_input.html`) | Extract the inner `.field` block of `account_field.html` (label, input, datalist, errors, counter, help); the import wrapper keeps its `<details id="account-details">` and `id="account-field"`; the manual form calls it inside More details with its own label/help/placeholder. Same `accountField` Alpine component, same datalist id. |
@@ -614,12 +617,13 @@ New Alpine component: `nowButton` only (`static/js/app.js`). New icons: none.
 
 ### New context keys (names for backend to supply)
 
-Form pages (add, close, edit): `mode` ("add" | "close" | "edit"); `form`; `zone`; `pv_state` ("pending" | "known" | "unknown"); `pv_root`; `pv_value_display` (formatted, known state); `pv_symbol` (normalized symbol the unknown input is for, rendered into `pv_for`); `more_open`; `show_fees` (false only for edit-open); `show_exit` (false for edit-open); `exit_required` (edit-closed and close); `form_token`; `account_labels`, `account_placeholder` (all brokers, per AC 31); `has_journal` (edit); `locked_fields` (set; empty until ADR-0008); `trade` (same keys the journal page passes to `trade_summary.html`, including `is_open`) for close and edit; `size_display` (close); `entry_time_display` (for `EXIT_BEFORE_ENTRY`).
-Form class: locked fields (7.2) must be **excluded from the form** for that request, not rendered as disabled inputs. Otherwise their absence from the POST reads as a blank required field. Read-only rows (known Point value, Size, locked fields) carry no input name.
+Form pages (add, close, edit): `mode` ("add" | "close" | "edit"); `form`; `zone`; `pv_state` ("pending" | "known" | "unknown"); `pv_root`; `pv_value_display` (formatted, known state); `pv_symbol` (normalized symbol the unknown input is for, rendered into `pv_for`); `more_open`; `show_fees` (false only for edit-open); `show_exit` (false for edit-open); `exit_required` (edit-closed and close); `form_token` (**add mode only**: the signed token, ADR-0008 §4; absent on close and edit); `account_labels`, `account_placeholder` (all brokers, per AC 31); `has_journal` (edit); `trade` (same keys the journal page passes to `trade_summary.html`, including `is_open`) for close and edit; `size_display` (close); `entry_time_display` (for `EXIT_BEFORE_ENTRY`).
+Removed from the earlier draft: `locked_fields` (ADR-0008 §2, no field locks). No other new key is needed for the wrong-side stop state (7.3) or the Close double submit.
+Form class: shape-dependent inputs are **absent from the form** for that request, not rendered as disabled inputs (edit-open has no exit or Fees fields; a POST naming them writes nothing, AC 38). Read-only rows (known Point value, Size) carry no input name.
 Field values: `entry_time` and `exit_time` bound as `YYYY-MM-DDTHH:MM` in the user's zone.
-Journal page: `trade.is_manual` (bool, from the opening execution's source) and `trade.is_open`. The template builds the action URLs from `{% url %}` and `trade.id`.
+Journal page: `trade.is_manual` (bool: opening execution `source == "manual"` and a non-NULL `broker_trade_id`, ADR-0008 §5, so a NULL-key test fixture never shows links that 404) and `trade.is_open`. The template builds the action URLs from `{% url %}` and `trade.id`.
 Delete page and partial: same names as the import version (`page`, `notice`, `body`, `journal_body`, `checkbox_label`, `delete_button`, `shown_token`) plus `entry` (`rules`, `note`, `has_risk`), `trade`.
-Point value endpoint (placeholder `trade_point_value`): GET `symbol`, returns `point_value.html` and the OOB live region; context `pv_state`, `pv_root`, `pv_value_display`, `pv_symbol`.
+Point value endpoint (`trade_point_value`, `/trades/point-value/`): GET `symbol`, returns `point_value.html` and the OOB live region; context `pv_state`, `pv_root`, `pv_value_display`, `pv_symbol`.
 List page: none (the Add link is a constant `{% url %}`).
 Flash attrs: add `{% block flash_attrs %} tabindex="-1" autofocus{% endblock %}` to `trade_list.html` so the delete and (future) list flashes get focus.
 
@@ -627,27 +631,25 @@ Flash attrs: add `{% block flash_attrs %} tabindex="-1" autofocus{% endblock %}`
 
 ## 14. Changes to other docs, spec questions, open questions
 
-### Other design docs (mine; not applied unless noted)
+### Other design docs (applied 2026-10-13)
 
 | Doc | Change |
 |---|---|
-| `auth-and-trades-list.md` 5.4 A | Replace "the one and only action ... no 'add by hand' option or link" with the two-button empty state (3.2). Same for 5.1's header sketch (add "Add trade") and "Former Q4" (now superseded by this doc). **Not applied** (waiting for the user to accept this draft). |
-| `import-account-label.md` header scope note | "restore 'add a trade' in the empty imports list" is not wanted: manual trades do not belong to an import. Import delete body unchanged. **Not applied.** |
-| `journaling.md` 4.6 | 404 body reworded (section 12). **Not applied.** |
-| `docs/README.md` | Add a Design row for `manual-entry` (owner `ux-designer`, Draft). Until the three edits above are applied, `auth-and-trades-list.md` 5.4 A ("no add by hand option") contradicts this doc; note it under "Known conflicts" or apply the edit once the user accepts this draft. Owner: orchestrator. |
+| `auth-and-trades-list.md` 5.1, 5.4 A, "Former Q4" | Applied: header sketch and empty state A carry "Add trade"; "no add by hand" removed; Q4 marked superseded by this doc. |
+| `import-account-label.md` scope note | Applied: the manual-entry note replaces the slice-1 "out of scope" note. No "add a trade" action in the imports list (manual trades belong to no import); import delete body unchanged; Account suggestions on the manual form span all brokers. |
+| `journaling.md` 4.6 | Applied: 404 body reworded (section 12). |
+| `docs/README.md` | Design row for `manual-entry` (owner `ux-designer`, status Accepted) and removal of the "no add by hand" conflict note: orchestrator. |
 
-### Spec points for `product-manager` (one line each)
+### Rulings folded in (all closed)
 
-1. **Close form and Account label:** AC 27 says More details on add, close and edit holds Fees and Account label, but AC 34 copies the label onto the exit fill and the label is part of the matcher bucket, so an editable label on close could split the pair. This design shows the label read-only in the header and puts only Fees in More details on close. Confirm, and amend AC 27.
-2. **Edit of an open trade shows no exit and no Fees**, derived from AC 29 and AC 38 ("no `Execution` row added or removed"). Adding the exit is Close's job. Confirm.
-3. **Fees on add:** AC 29 says no Fees input is offered on an open trade. On the add form that state is unknowable before submit without JS, so Fees is always offered there and rejected with `FEES_NEEDS_EXIT` when posted without an exit. Edit-open and close behave per AC 29. Confirm. Open sub-question: does a posted `0` count as "a Fees value"? This design says any non-blank value is rejected; relax if you prefer.
-4. **Empty-state wording:** `import-and-list.md` section 2 needs the same manual-entry pass (`TRADES_EMPTY_BODY` replaced).
+- Spec items that were PENDING (close shows the Account label read-only and only Fees in More details; edit-open has no exit or Fees; Fees always offered on add, rejected with no exit, `0` counts) are now spec text (AC 27, 29).
+- AC 8/35 (exit before entry) and AC 21 (DST): domain §7 and ADR-0008 §6.
+- Routes, no field locks, stop re-check (allowed), form-token mechanics, Close double submit (no token, AC 36): ADR-0008 §2, §4, §5.
 
 ### Needs another owner
 
-- `architect` (ADR-0008): route/endpoint names (placeholders above: `trade_add`, `trade_close`, `trade_edit`, `trade_delete`, `trade_point_value`); lock set (7.2); stop re-check (7.3); form-token mechanics; exit-before-entry opener ordering.
-- `trading-domain-expert`: AC 8 (exit before entry), AC 21 (DST). Copy is drafted and marked PENDING.
-- `backend-engineer`: re-render-with-values on every failure; the `pv_for` guard; token replay returns the same redirect; the 401-without-redirect exception on the point-value endpoint; `copy` binding (row 42).
+- `product-manager`: `import-and-list.md` section 2 needs the same manual-entry pass (`TRADES_EMPTY_BODY` replaced).
+- `backend-engineer` (PR M2): re-render-with-values on every failure; the `pv_for` guard; add-token replay returns the same redirect; the 401-without-redirect exception on the point-value endpoint; `copy` binding (row 42); all section 12 strings verbatim; unstyled working templates against the section 13 keys.
 
 ### Open questions
 
@@ -660,24 +662,23 @@ Flash attrs: add `{% block flash_attrs %} tabindex="-1" autofocus{% endblock %}`
 
 ## 15. Frontend deliverables (build these and nothing else)
 
-Backend and ADR-0008 must exist first; templates are built against the context keys in section 13.
+PR M3. ADR-0008 is Accepted; PR M2 (backend) must be merged first, because it ships the working unstyled templates, forms, views, services, copy keys and context keys that M3 makes design-complete. Scope is ADR-0008 §5 plus this list, minus locked-field rows (ADR-0008 §2) and minus `form_token` on Close (ADR-0008 §4). Templates are built against the context keys in section 13.
 
 - [ ] `trade_list.html`: "Add trade" `btn-secondary` after Import (3.1); `flash_attrs` block.
 - [ ] `trades_empty.html`: secondary "Add trade" button in states A and B (3.2).
 - [ ] `trade_actions.html` + included in `journal_form.html` under the summary for `trade.is_manual` (3.3); `delete_dialog.html` included on that page; `delete_link.html` gains `label`.
-- [ ] `trade_form.html` (add/close/edit by `mode`) per sections 4, 6, 7: field order, `field.html` with `suffix=USD` on price and Fees, `novalidate`, `aria-required`, `datetime-local`, error summary, sticky `action-bar`, `data-busy`, hidden `form_token`.
-- [ ] Symbol currency hint (4.2): second `<p id="id_symbol_currency_hint">` under the Symbol help via an optional `hint`/`hint_id` on `field.html`; `aria-describedby` on Symbol = help, hint, error ids; `copy.SYMBOL_CURRENCY_HINT`; rendered for `mode` add and edit, never close, omitted if `symbol` is locked; test asserts the text, the id in `aria-describedby`, and absence on close.
+- [ ] `trade_form.html` (add/close/edit by `mode`) per sections 4, 6, 7: field order, `field.html` with `suffix=USD` on price and Fees, `novalidate`, `aria-required`, `datetime-local`, error summary, sticky `action-bar`, `data-busy`, hidden `form_token` on the add form only (not on close or edit).
+- [ ] Symbol currency hint (4.2): second `<p id="id_symbol_currency_hint">` under the Symbol help via an optional `hint`/`hint_id` on `field.html`; `aria-describedby` on Symbol = help, hint, error ids; `copy.SYMBOL_CURRENCY_HINT`; rendered for `mode` add and edit, never close; test asserts the text, the id in `aria-describedby`, and absence on close.
 - [ ] `side_tiles.html` (no default, side by side, 48px mobile, neutral tokens).
 - [ ] `point_value.html` three states, `readonly_value.html`, hidden `pv_for`; Symbol input htmx attrs (5.4), `#point-value-live` OOB region; no focus move.
 - [ ] `time_field.html` + `nowButton` in `app.js` (CSP, `data-` props, floor to minute, zone from `data-zone`, status text; button `hidden` without JS).
 - [ ] `account_input.html` extracted from `account_field.html` (import page output unchanged; its tests still pass); used in More details.
 - [ ] More details `<details class="disclosure">` open by `more_open`; contents per mode (add: Fees + Account; close: Fees; edit-closed: Fees + Account; edit-open: Account).
-- [ ] Locked-field row rendering from `locked_fields` (7.2), wired but empty until ADR-0008.
 - [ ] `trade_delete_confirm.html` + `trade_delete.html` (8): two variants, entry region, tick gate via `deleteConfirm`, stale/not-ticked/failed notices, no-JS page.
 - [ ] `trade_not_found.html`: unchanged markup, body from the replaced key.
 - [ ] Copy: every string from section 12 via `copy.*` from the right module; no English literals in the new templates.
 - [ ] Tailwind bundle rebuilt if any new class is missing from `static/css/app.css` (check `input-suffix-box`, `radio-tile`, `action-bar`, `disclosure` already present).
 
-States to verify by hand (light and dark, 320px, 200% zoom): add blank, validation error (each required field), unknown point value (no JS and htmx), known root, symbol changed after prompt, exit pair error, fees without exit, future time, save failure, submitting, edit open and closed, edit with journal (info line), close (valid, already closed, exit before entry), delete variant 1 and 2, stale, not ticked, failed, no-JS delete page, 404 for imported/foreign/deleted, empty states A and B, mobile sticky bar over a focused field, Side tiles at 320px.
+States to verify by hand (light and dark, 320px, 200% zoom): add blank, validation error (each required field), unknown point value (no JS and htmx), known root, symbol changed after prompt, exit pair error, fees without exit, future time, save failure, submitting, edit open and closed, edit with journal (info line), edit that leaves a stop on the wrong side (journal page status line, then the stop error on the next journal save), close (valid, already closed, exit before entry), delete variant 1 and 2, stale, not ticked, failed, no-JS delete page, 404 for imported/foreign/deleted, empty states A and B, mobile sticky bar over a focused field, Side tiles at 320px.
 
 Focus and aria summary: flash/summary/Notice focused on load; field errors `aria-invalid` + `aria-describedby`; Side by fieldset/legend; read-only values as `<dl>`; USD suffix `aria-hidden`; live regions only for the point-value swap and the time button; no `role="alert"`.

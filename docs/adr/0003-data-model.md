@@ -1,6 +1,6 @@
 # ADR-0003: Core data model (executions, derived trades, journal)
 
-- **Status:** Accepted; amended by [ADR-0004](0004-topstep-dedupe-and-pairing.md) (dedupe key, `broker_trade_id`, `skipped_conflict`, matcher grouping)
+- **Status:** Accepted; §4 immutability amended by [ADR-0008](0008-manual-entry.md); amended by [ADR-0004](0004-topstep-dedupe-and-pairing.md) (dedupe key, `broker_trade_id`, `skipped_conflict`, matcher grouping)
 - **Amendment 2026-09-26:** every [GUESS] below is closed; no schema change. `contract_multiplier` and
   `fees` confirmed by `docs/domain/topstep-import.md` §2/§3/§5; `broker_account_label` changed by
   ADR-0004; R-multiple columns confirmed by user ruling, rule in `docs/domain/pnl-and-matching.md` §3.
@@ -110,8 +110,12 @@ reasons" UI reads.
 
 ### 4. `journal_execution` — the source of truth
 
-Immutable by convention: append-only, never `UPDATE`d. Correcting a manual entry deletes and
-recreates its executions; imported executions are never edited (re-import instead).
+Imported executions (`source='import'`) are immutable: never `UPDATE`d. The fix is a re-import or
+"Delete this import" (ADR-0005). Manual executions (`source='manual'`) are edited in place, only through
+`journal/services.py` `edit_manual_trade` (ADR-0008 §2). It writes both legs of the trade in one transaction
+with `save(update_fields=...)`, so ids and `created_at` never change and the journal entry stays attached. A
+manual trade is removed only through `delete_manual_trade` (ADR-0008 §3). `QuerySet.update()` stays banned
+(ADR-0006).
 
 | Column | Type | Notes |
 |---|---|---|
