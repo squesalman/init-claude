@@ -2,7 +2,7 @@
 
 A web app where retail traders log trades, journal their reasoning and emotions, and get evidence-backed insights into *behavioral* patterns (revenge trading, overtrading, tilt, rule-breaking) — not just P&L stats.
 
-**Status:** building the MVP. Slice 1 (Topstep import, `/trades/` list, stat cards, delete-import) is merged through PR #9. Journaling is specced and designed (ADR-0007 Accepted); journaling J1-J3 and QA merged (PRs #10-#13); next the end-of-slice end-to-end check (user), then the next slice. Current state and open follow-ups (`docs/data/follow-ups.md`): `docs/plan.md`. Keep this line short; PR history lives in the plan.
+**Status:** building the MVP. Slice 1 (Topstep import, `/trades/` list, stat cards, delete-import) is merged through PR #9. Journaling is specced and designed (ADR-0007 Accepted); journaling is done (PRs #10-#13, end-to-end check passed); building manual entry (spec, design, domain and ADR-0008 Accepted): M1 (docstrings) -> M2 (backend) -> M3 (frontend), then QA and security review. Current state and open follow-ups (`docs/data/follow-ups.md`): `docs/plan.md`. Keep this line short; PR history lives in the plan.
 
 **Read `docs/README.md` first.** It indexes every doc with owner and status. Found two docs that disagree? Stop, report it, and don't pick a side.
 
