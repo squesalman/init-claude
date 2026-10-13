@@ -61,14 +61,14 @@ compensating index where the other three didn't.
 
 ## `journal_execution` (`UserOwned`) — source of truth
 
-Immutable by convention (never `UPDATE`d; corrections delete+recreate).
+Imported fills (`source='import'`) are immutable: never `UPDATE`d (re-import or delete the import, ADR-0005). Manual fills (`source='manual'`) are edited in place only by `services.edit_manual_trade`, both legs of the trade in one transaction (ADR-0008 §2). A manual trade carries its own pairing key, `broker_trade_id = "manual:<32 hex>"`, set on add and copied to the exit fill on close; the matcher bucket is `(user, broker, account label, symbol, broker_trade_id)` (ADR-0004 §3 as amended by ADR-0008 §1).
 
 | Column | Type | Nullable | Notes |
 |---|---|---|---|
 | `broker` | `VARCHAR(32)` | no | `'topstep'` or `'manual'` |
 | `broker_execution_id` | `VARCHAR(128)` | yes | `NULL` for manual entry. The dedupe `UniqueConstraint` below (`execution_broker_dedupe`) exempts both `NULL` **and** empty string — see that constraint's note |
 | `broker_account_label` | `VARCHAR(64)` | no, default `''` | from export; no account table yet. Part of the dedupe key (ADR-0004 §1); blank labels compare equal. Must be stored trimmed: `CHECK (broker_account_label = btrim(broker_account_label))` — `execution_broker_account_label_trimmed` (else `'A'` vs `'A '` would double-insert one fill); importer must strip before insert |
-| `broker_trade_id` | `VARCHAR(128)` | yes | broker-reported round-trip id (Topstep row `Id`), set on both legs; `NULL` for manual / fill-only imports. Matcher bucket key (ADR-0004 §3). `CHECK (broker_trade_id IS NULL OR btrim(broker_trade_id) <> '')` — `execution_broker_trade_id_not_blank` (a stray `''` or whitespace-only value would merge unrelated trades) |
+| `broker_trade_id` | `VARCHAR(128)` | yes | broker-reported round-trip id (Topstep row `Id`), set on both legs; `NULL` only for a future fill-only importer; manual fills carry `manual:<32 hex>` (ADR-0008 §1). Matcher bucket key (ADR-0004 §3). `CHECK (broker_trade_id IS NULL OR btrim(broker_trade_id) <> '')` — `execution_broker_trade_id_not_blank` (a stray `''` or whitespace-only value would merge unrelated trades) |
 | `symbol` | `VARCHAR(32)` | no | uppercased, as broker wrote it |
 | `side` | `VARCHAR(4)` | no | `CHECK (side IN ('buy','sell'))`. Derived from `SIDE_CHOICES` the same way as `status` above (round-8 code review) — see that note |
 | `quantity` | `NUMERIC(20,10)` | no | `CHECK (quantity > 0)`. Always positive; direction lives in `side` |
