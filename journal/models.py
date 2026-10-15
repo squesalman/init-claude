@@ -351,9 +351,10 @@ class RawImportRow(UserOwned):
 
 class Execution(UserOwned):
     """
-    The source of truth. Immutable by convention: append-only, never UPDATEd (ADR-0003 §4).
-    Correcting a manual entry deletes and recreates its executions; imported executions are
-    never edited (re-import instead).
+    The source of truth. Imported fills are immutable (never UPDATEd; re-import or delete the
+    import). Manual fills are edited in place only by services.edit_manual_trade (ADR-0008),
+    both legs in one transaction. Manual trades carry broker_trade_id = "manual:<32 hex>",
+    one per trade.
     """
 
     SIDE_BUY = _SIDE_BUY
@@ -491,12 +492,11 @@ class JournalEntry(UserOwned):
     has no database id of its own.
     """
 
-    # RESTRICT, not CASCADE and not PROTECT. ADR-0003's manual-entry correction flow is
-    # delete-old-execution + insert-new-execution; CASCADE would silently destroy the note
-    # + rules_followed flag along with the old execution. RESTRICT raises
-    # django.db.models.deletion.RestrictedError on a standalone `execution.delete()`,
-    # forcing the correction code to explicitly re-point this row at the new execution (or
-    # deliberately delete the journal entry) first — no silent data loss. Unlike PROTECT,
+    # RESTRICT, not CASCADE and not PROTECT. Every path that deletes executions (import
+    # delete, ADR-0005; manual trade delete, ADR-0008) deletes the journal entry first,
+    # explicitly, after a counted confirm; CASCADE would destroy the note silently.
+    # RESTRICT raises django.db.models.deletion.RestrictedError on a standalone
+    # `execution.delete()`, so no code path can lose a note by accident. Unlike PROTECT,
     # RESTRICT still allows account deletion to cascade in one statement (ADR-0003's "one
     # statement" account-deletion guarantee): when a User is deleted, this JournalEntry is
     # already being deleted via its own `user` FK (CASCADE) in the same operation, so
