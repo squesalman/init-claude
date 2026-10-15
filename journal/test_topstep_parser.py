@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from journal.importers.topstep import HEADER, ImportFileError, parse
+from journal.importers.topstep import HEADER, ImportFileError, contract_root, parse
 from journal.matching import derive_trades
 
 FIXTURE = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "topstep_synthetic.csv"
@@ -55,7 +55,10 @@ def csv_bytes(*rows, header=HEADER, bom=True, newline="\r\n"):
 def as_executions(parsed):
     """Parsed legs as plain objects, the shape derive_trades() reads."""
     legs = [leg for row in parsed for leg in row.legs]
-    return [SimpleNamespace(id=i, broker_account_label="", **leg) for i, leg in enumerate(legs)]
+    return [
+        SimpleNamespace(id=i, broker="topstep", broker_account_label="", **leg)
+        for i, leg in enumerate(legs)
+    ]
 
 
 def utc(*args):
@@ -294,3 +297,19 @@ def test_exit_at_the_same_second_as_entry_is_allowed():
     [row] = parse(csv_bytes({**T1, "ExitedAt": T1["EnteredAt"]}))
 
     assert row.error == ""
+
+
+# --- contract_root (ADR-0008 section 7): one root rule for the importer and manual entry -------
+
+
+@pytest.mark.parametrize("symbol, root", [
+    ("CLZ6", "CL"), ("MCLZ6", "MCL"), ("ZZZH7", "ZZZ"), ("ESZ6", "ES"),
+    ("AAPL", None), ("Z6", None), ("CL", None), ("", None), ("clz6", None),
+])
+def test_contract_root(symbol, root):
+    assert contract_root(symbol) == root
+
+
+def test_contract_root_caps_the_length_before_matching():
+    assert contract_root("Q" * 31 + "Z6") is None  # 33 > VARCHAR(32): never a stored symbol
+    assert contract_root("Q" * 30 + "Z6") == "Q" * 30

@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{# ManualTradePage (docs/design/manual-entry.md 4, 6, 13; ADR-0008 section 5): one template for add and close by `mode`. PR M2a ships it working and unstyled; PR M3 makes it design-complete (side tiles, time button, htmx point value, account partial, action bar). Every string comes from journal.copy. #}
+{% block title %}{{ title }}{% endblock %}
+{% block width %}max-w-form{% endblock %}
+{% block flash_attrs %} tabindex="-1" autofocus{% endblock %}
+{% block content %}
+<p><a href="{{ back_url }}">{% if mode == "close" %}{{ copy.BACK_TO_TRADE }}{% else %}{{ copy.JOURNAL_BACK }}{% endif %}</a></p>
+{% if mode == "close" %}
+{% include "journal/partials/trade_summary.html" %}
+<h2 class="mt-6 font-semibold">{{ copy.TRADE_CLOSE }}</h2>
+<p class="mt-1 text-text-muted">{{ copy.CLOSE_INTRO }}</p>
+{% else %}
+<h1 class="text-title font-semibold">{{ copy.ADD_TITLE }}</h1>
+<p class="mt-1 text-text-muted">{{ copy.ADD_INTRO }}</p>
+{% endif %}
+
+{% if notice %}<div class="mt-4" tabindex="-1" autofocus>{% include "partials/notice.html" with variant=notice.variant body=notice.text %}</div>{% endif %}
+
+<form method="post" action="{% if mode == "close" %}{% url 'trade_close' trade.id %}{% else %}{% url 'trade_add' %}{% endif %}" novalidate class="mt-4 space-y-6">
+  {% csrf_token %}
+  {% include "partials/error_summary.html" %}
+  {% if mode == "add" %}
+  <input type="hidden" name="form_token" value="{{ form_token }}">
+  {% include "partials/field.html" with field=form.symbol hint=copy.SYMBOL_CURRENCY_HINT hint_id=form.symbol_hint_id %}
+  {% include "journal/partials/point_value.html" %}
+  <p id="point-value-live" role="status" class="sr-only"></p>
+  {% with field=form.side %}
+  <fieldset aria-describedby="{{ field.auto_id }}_helptext{% if field.errors %} {{ field.auto_id }}_error{% endif %}">
+    <legend class="font-medium">{{ field.label }}</legend>
+    <p id="{{ field.auto_id }}_helptext" class="mt-1 text-text-muted">{{ field.help_text }}</p>
+    {# id: the error summary links to #{{ field.auto_id }} #}
+    <div id="{{ field.auto_id }}" class="mt-2 flex gap-4">
+      {% for radio in field %}<label for="{{ radio.id_for_label }}">{{ radio.tag }} {{ radio.choice_label }}</label>
+      {% endfor %}
+    </div>
+    {% include "partials/field_errors.html" %}
+  </fieldset>
+  {% endwith %}
+  {% include "partials/field.html" with field=form.quantity %}
+  {% include "partials/field.html" with field=form.entry_price suffix="USD" %}
+  {% include "partials/field.html" with field=form.entry_time %}
+  {% else %}
+  <dl><div><dt class="font-medium">{{ copy.SIZE_LABEL }}</dt><dd>{{ size_display }}</dd></div></dl>
+  {% endif %}
+
+  <fieldset{% if not exit_required %} aria-describedby="exit-help"{% endif %} class="space-y-4">
+    <legend class="font-medium">{% if exit_required %}{{ copy.EXIT_LEGEND_CLOSED }}{% else %}{{ copy.EXIT_LEGEND_OPTIONAL }}{% endif %}</legend>
+    {% if not exit_required %}<p id="exit-help" class="text-text-muted">{{ copy.EXIT_HELP_OPTIONAL }}</p>{% endif %}
+    {% include "partials/field.html" with field=form.exit_price suffix="USD" %}
+    {% include "partials/field.html" with field=form.exit_time %}
+  </fieldset>
+
+  <details id="more-details" class="disclosure"{% if more_open %} open{% endif %}>
+    <summary>{{ copy.MORE_SUMMARY }}</summary>
+    <div class="space-y-4 pb-2">
+      {% if show_fees %}{% include "partials/field.html" with field=form.fees suffix="USD" %}{% endif %}
+      {% if mode == "add" %}
+      {% with field=form.account %}
+      <div class="field">
+        <label for="{{ field.id_for_label }}" class="font-medium">{{ field.label }}</label>
+        <input type="text" name="{{ field.html_name }}" id="{{ field.id_for_label }}" value="{{ field.value|default_if_none:'' }}" list="account-labels" autocomplete="off" placeholder="{{ account_placeholder }}" aria-describedby="{{ field.auto_id }}_helptext{% if field.errors %} {{ field.auto_id }}_error{% endif %}"{% if field.errors %} aria-invalid="true"{% endif %}>
+        <datalist id="account-labels">{% for label in account_labels %}<option value="{{ label }}">{% endfor %}</datalist>
+        {% include "partials/field_errors.html" %}
+        <p id="{{ field.auto_id }}_helptext" class="mt-1 text-text-muted">{{ field.help_text }}</p>
+      </div>
+      {% endwith %}
+      {% endif %}
+    </div>
+  </details>
+
+  <div class="action-bar">
+    <button type="submit" class="btn-primary w-full sm:w-auto" data-busy="{{ copy.SAVE_BUSY }}">{% if mode == "close" %}{{ copy.SAVE_CLOSE }}{% else %}{{ copy.SAVE_ADD }}{% endif %}</button>
+    <a href="{{ back_url }}" class="inline-flex min-h-[44px] items-center">{{ copy.MANUAL_CANCEL }}</a>
+  </div>
+</form>
+{% endblock %}

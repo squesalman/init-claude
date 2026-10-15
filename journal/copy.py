@@ -195,7 +195,7 @@ JOURNAL_INTRO = (
     "Nothing here is required. Save whatever you have; you can come back and change it."
 )
 NOT_FOUND_TITLE = "We couldn't find that trade"
-NOT_FOUND_BODY = "It may have been removed along with an import."
+NOT_FOUND_BODY = "It may have been deleted, or removed along with an import."  # manual-entry 12
 NOT_FOUND_LINK = "Back to trades"
 
 RULES_HEADING = "My rules"
@@ -302,3 +302,113 @@ LIST_JOURNAL_SR_CONTEXT = "{state} for {symbol}, opened {opened}"
 
 AVG_R_LEFT_OUT_ONE = "Left out: 1 closed trade without usable risk"
 AVG_R_LEFT_OUT_MANY = "Left out: {n} closed trades without usable risk"
+
+# Manual trade entry: add and close (docs/design/manual-entry.md section 12; verbatim, the design
+# doc owns the wording). Edit and delete strings arrive with PR M2b.
+TRADE_ACTIONS_LABEL = "Trade actions"
+TRADE_CLOSE = "Close this trade"
+
+ADD_TITLE = "Add a trade"
+ADD_INTRO = (
+    "Symbol, side, quantity, entry price and entry time are all you need. Everything else can "
+    "wait. Amounts are in US dollars (USD)."
+)
+CLOSE_TITLE = "Close {symbol}"
+CLOSE_INTRO = (
+    "Add the exit for this trade. It closes the whole position, so there's no quantity to enter."
+)
+BACK_TO_TRADE = "Trade"
+SAVE_ADD = "Save trade"
+SAVE_CLOSE = "Close trade"
+SAVE_BUSY = "Saving..."
+MANUAL_CANCEL = "Cancel"
+
+SYMBOL_LABEL = "Symbol"
+SYMBOL_HELP = "For example AAPL or CLZ6."
+# Add and edit only; temporary, remove when non-USD lands (follow-ups row 45).
+SYMBOL_CURRENCY_HINT = (
+    "For now we only support USD-quoted instruments; others, like USDJPY, EURGBP, USDT pairs or "
+    "non-US stocks, would be saved as USD and show the wrong P&L."
+)
+SIDE_LEGEND = "Side"
+SIDE_HELP = "Long means you bought first. Short means you sold first."
+SIDE_LONG = "Long"
+SIDE_SHORT = "Short"
+QUANTITY_LABEL = "Quantity"
+QUANTITY_HELP = "Shares, contracts or units. Decimals are fine, like 0.5."
+ENTRY_PRICE_LABEL = "Entry price"
+PRICE_HELP = "Price per unit, in USD."
+ENTRY_TIME_LABEL = "Entry time"
+TIME_HELP = "In your time zone, {zone}."
+NOW_BUTTON = "Use current time"
+NOW_SET = "Set to {time}."
+EXIT_LEGEND_OPTIONAL = "Exit (optional)"
+EXIT_HELP_OPTIONAL = (
+    "Leave both blank if the trade is still open. You can add the exit later with Close this "
+    "trade."
+)
+EXIT_LEGEND_CLOSED = "Exit"
+EXIT_PRICE_LABEL = "Exit price"
+EXIT_TIME_LABEL = "Exit time"
+SIZE_LABEL = "Size"
+SIZE_VALUE = "{quantity} (the whole position)"
+POINT_VALUE_LABEL = "Point value"
+POINT_VALUE_PENDING = (
+    "We'll fill this in from the symbol when you save. If we don't know it, we'll ask."
+)
+POINT_VALUE_KNOWN_HELP = "Set from the symbol ({root}). It can't be changed here."
+POINT_VALUE_HELP = (
+    "What one full point of price move is worth for one unit, in USD. For shares, use 1."
+)
+POINT_VALUE_LIVE_KNOWN = "Point value for {root} is {value}."
+POINT_VALUE_LIVE_ASK = (
+    "We don't have a point value for {symbol}. Enter one below. For shares, use 1."
+)
+MORE_SUMMARY = "More details (optional)"
+FEES_LABEL = "Fees"
+FEES_HELP_ADD = "Total fees for the whole trade, in USD. Only used when the trade has an exit."
+FEES_HELP = "Total fees for the whole trade, in USD."
+MANUAL_ACCOUNT_HELP = "Only if you track more than one account. Use the same name each time."
+MANUAL_ACCOUNT_PLACEHOLDER = "e.g. Main account"
+
+SYMBOL_REQUIRED = "Enter the symbol, for example AAPL or CLZ6."
+SYMBOL_TOO_LONG = "Use 32 characters or fewer."
+SYMBOL_CONTROL_CHARACTERS = "Symbols can't contain hidden characters; retype it instead of pasting."
+# Shown under the price when abs(price) x quantity x point value reaches 10**15 (NUMERIC(19,4)).
+TRADE_VALUE_TOO_LARGE = (
+    "Price, quantity and point value together are too large; check them for a typo."
+)
+SIDE_REQUIRED = "Choose Long or Short."
+QUANTITY_REQUIRED = "Enter how many you traded."
+QUANTITY_NOT_NUMBER = "Enter a number like 10 or 0.5. Use a period for decimals."
+QUANTITY_NOT_POSITIVE = "Quantity needs to be more than 0."
+QUANTITY_DECIMALS = "Use up to 10 decimal places."
+PRICE_DECIMALS = "Use up to 10 decimal places."
+ENTRY_PRICE_REQUIRED = "Enter your entry price."
+PRICE_NOT_NUMBER = "Enter a number like 100.25. Use a period for decimals."
+PRICE_ZERO = "Enter a price other than 0."
+EXIT_PRICE_NEEDED = "Add an exit price, or clear the exit time."
+EXIT_TIME_NEEDED = "Add an exit time, or clear the exit price."
+EXIT_PRICE_REQUIRED = "Enter the exit price."
+EXIT_TIME_REQUIRED = "Enter the exit time."
+ENTRY_TIME_REQUIRED = "Enter when you entered the trade."
+TIME_INVALID = "Enter a date and time like 2026-03-02 09:30."
+TIME_TOO_OLD = "Use a date in 1970 or later."
+TIME_FUTURE = "That time hasn't happened yet in {zone}. Check the date, time and time zone."
+TIME_NOT_READABLE = "We couldn't use that time in {zone}. Check the date and time, then try again."
+EXIT_BEFORE_ENTRY = "The exit time can't be before the entry time ({entry})."
+POINT_VALUE_NEEDED = "We don't have a point value for {symbol} yet. Enter one; for shares, use 1."
+POINT_VALUE_NOT_NUMBER = "Enter a number like 1000. Use a period for decimals."
+POINT_VALUE_NOT_POSITIVE = "Point value needs to be more than 0."
+POINT_VALUE_DECIMALS = "Use up to 10 decimal places."
+FEES_NOT_NUMBER = "Enter a number like 2.50. Use a period for decimals."
+FEES_NEGATIVE = "Fees can't be negative. Enter 0 or more."
+FEES_DECIMALS = "Use up to 4 decimal places."
+FEES_NEEDS_EXIT = "Fees apply once a trade is closed. Add an exit, or clear Fees."
+
+TRADE_ADDED = "Trade added. Journal it now, or come back later."
+TRADE_CLOSED = "Trade closed."
+ALREADY_CLOSED = "That trade was already closed, so nothing was added."
+MANUAL_SAVE_FAILED = (
+    "We couldn't save that just now. Your entries are still here, so try again in a moment."
+)

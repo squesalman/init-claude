@@ -49,7 +49,10 @@ LOGOUT_FLASH = "You're logged out."
 
 # /trades/ empty state A (5.4)
 TRADES_EMPTY_HEADING = "No trades yet"
-TRADES_EMPTY_BODY = "Upload your TopstepX 'Trades' export and your trades show up here."
+# Replaced by docs/design/manual-entry.md 12 (manual entry ships).
+TRADES_EMPTY_BODY = (
+    "Upload your TopstepX 'Trades' export, or add a trade by hand. Your trades show up here."
+)
 TRADES_EMPTY_ACTION = "Import trades"
 # /trades/ empty state B (5.4): has imports, none produced a trade. Heading as A.
 TRADES_EMPTY_B_BODY = "Your last upload didn't add any trades."
@@ -111,6 +114,7 @@ CALC_TIMES = (
 # as on the import pages. SORT_OPTIONS values are the mobile select's combined sort_dir param.
 TRADES_TITLE = "Trades"
 IMPORT_TRADES = "Import trades"
+ADD_TRADE = "Add trade"  # docs/design/manual-entry.md 12
 TRADES_CAPTION = "Your trades"
 TIMES_IN = "Times in {zone}"
 SORT_LABEL = "Sort by"

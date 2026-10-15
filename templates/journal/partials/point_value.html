@@ -1,0 +1,14 @@
+{# PointValue (docs/design/manual-entry.md 5.1): the three states in one block, id point-value, the htmx swap target. Known is a read-only <dl> row, never an input, so nothing is posted for it. The endpoint response (oob) also updates the page's persistent #point-value-live. #}
+<div id="point-value">
+{% if pv_state == "known" %}
+  <dl><div><dt class="font-medium">{{ copy.POINT_VALUE_LABEL }}</dt><dd class="tabular-nums">{{ pv_value_display }}</dd></div></dl>
+  <p class="mt-1 text-text-muted">{{ pv_known_help }}</p>
+{% elif pv_state == "unknown" %}
+  {% include "partials/field.html" with field=form.point_value %}
+  <input type="hidden" name="pv_for" value="{{ pv_symbol }}">
+{% else %}
+  <p class="font-medium">{{ copy.POINT_VALUE_LABEL }}</p>
+  <p class="mt-1 text-text-muted">{{ copy.POINT_VALUE_PENDING }}</p>
+{% endif %}
+</div>
+{% if oob %}<p id="point-value-live" role="status" class="sr-only" hx-swap-oob="innerHTML">{{ pv_live }}</p>{% endif %}

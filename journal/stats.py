@@ -7,7 +7,7 @@ stop check (ADR-0007 section 4). Pure: no DB.
 
 from collections import defaultdict
 from dataclasses import dataclass
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 
 # Reason codes, exactly the domain strings (pnl-and-matching.md section 3).
 TRADE_OPEN = "trade_open"
@@ -18,6 +18,9 @@ STOP_PRICE_MULTI_LEG = "stop_price_multi_leg"
 NO_RISK_INPUT = "no_risk_input"
 
 _R_UNIT = Decimal("0.0001")
+# R and its mean can pass 28 digits on an oversized trade (net up to ~1e28 over a 0.0001
+# risk); the default context's quantize would raise. Same precision as the matcher.
+_PREC = 60
 _AVG_R_UNIT = Decimal("0.01")
 
 
@@ -42,6 +45,11 @@ def stop_on_loss_side(trade, stop_price) -> bool:
 def r_multiple(trade, entry) -> tuple[Decimal | None, str | None]:
     """(R at 4 dp HALF_EVEN, None) or (None, reason). Evaluation order per section 3: planned
     risk wins with no fallback to the stop; the stop needs a single-entry trade."""
+    with localcontext(prec=_PREC):
+        return _r(trade, entry)
+
+
+def _r(trade, entry):
     if trade.is_open:
         return None, TRADE_OPEN
     planned = entry.planned_risk_amount if entry is not None else None
@@ -69,7 +77,8 @@ def compute_stats(trades, entries_by_opening_id) -> dict[str, CurrencyStats]:
         if not trade.is_open:
             r, _ = r_multiple(trade, entries_by_opening_id.get(trade.opening_execution_id))
             closed_by_currency[trade.currency].append((trade.net_pnl, r))
-    return {currency: _stats(rows) for currency, rows in closed_by_currency.items()}
+    with localcontext(prec=_PREC):
+        return {currency: _stats(rows) for currency, rows in closed_by_currency.items()}
 
 
 def _stats(rows: list[tuple[Decimal, Decimal | None]]) -> CurrencyStats:

@@ -167,7 +167,7 @@ More details open:
 | Field (`name`) | Control | Attributes | Server notes |
 |---|---|---|---|
 | Symbol (`symbol`) | `type="text"` | `autocomplete="off"`, `autocapitalize="characters"`, `spellcheck="false"`, `aria-required`, no `maxlength` (a native cap silently cuts pastes), `autofocus` on a fresh GET with no errors | Trim, uppercase, 32 max (AC 11). Re-rendered value is the normalized one. |
-| Symbol currency hint (no `name`, not a field) | `<p id="id_symbol_currency_hint" class="mt-1 text-text-muted">` directly under the Symbol help line, before any error message | Same style as every other help line (muted token, AA contrast, no icon, no border, not a `Notice`). Static `SYMBOL_CURRENCY_HINT`, always visible: not collapsed, not dismissible, not a tooltip, not a live region, not in the error summary, and not cleared or changed by an error re-render. Shown on **add and edit**; **not on close** (no Symbol input there). The Symbol input's `aria-describedby` lists, in order: help id, hint id, error id (same help-then-error convention as 10.2). `field.html` renders one `help_text` paragraph today, so give it an optional `hint` / `hint_id` parameter (second `<p>`), and have the form add the hint id to the widget's `aria-describedby` (Django only emits the help and error ids). Backend only passes `mode`; no new context key. |
+| Symbol currency hint (no `name`, not a field) | `<p id="id_symbol_currency_hint" class="mt-1 text-text-muted">` directly under the Symbol help line (visual order, top to bottom: input, error if any, help, hint; decided 2026-10-13, matching the merged `field.html` used by every form, so the error stays next to the input it is about) | Same style as every other help line (muted token, AA contrast, no icon, no border, not a `Notice`). Static `SYMBOL_CURRENCY_HINT`, always visible: not collapsed, not dismissible, not a tooltip, not a live region, not in the error summary, and not cleared or changed by an error re-render. Shown on **add and edit**; **not on close** (no Symbol input there). The Symbol input's `aria-describedby` lists, in order: help id, hint id, error id (same help-then-error convention as 10.2; this is the announcement order and need not match the visual order above). `field.html` renders one `help_text` paragraph today, so give it an optional `hint` / `hint_id` parameter (second `<p>`), and have the form add the hint id to the widget's `aria-describedby` (Django only emits the help and error ids). Backend only passes `mode`; no new context key. |
 | Side (`side`) | fieldset + 2 radios | legend "Side", help tied by `aria-describedby`; no `checked` | Required. Long = buy entry. |
 | Quantity (`quantity`) | `type="text"` | `inputmode="decimal"`, `autocomplete="off"`, `autocapitalize="none"`, `spellcheck="false"`, `aria-required` | `PlainDecimalField` rules (AC 9, 10). |
 | Entry price (`entry_price`) | same, with `suffix=USD` | same | Non-zero; negative allowed. |
@@ -201,7 +201,7 @@ Known ceiling: `inputmode="decimal"` has no minus key on iOS, though negative pr
 
 | State (`pv_state`) | When | What renders |
 |---|---|---|
-| `pending` | Add form with no symbol yet (first GET, or symbol blank) | Muted block: label "Point value", text `POINT_VALUE_PENDING`. No input. |
+| `pending` | Add form with no symbol yet (first GET, or symbol blank), or a symbol that fails its own check (too long, hidden or control characters), so the root cannot be read. The symbol error shows on the Symbol field only; no point-value error and no input is added until the symbol is valid. The htmx endpoint answers `pending` for these too. | Muted block: label "Point value", text `POINT_VALUE_PENDING`. No input. |
 | `known` | Symbol has a root in `MULTIPLIERS` | `<dl class="field"><div><dt>Point value</dt><dd>1,000</dd></div></dl>` plus help `POINT_VALUE_KNOWN_HELP` ("Set from the symbol (CL). It can't be changed here."). Not an input, not disabled, not posted. Value formatted with thousands separators. |
 | `unknown` | Symbol has no root or the root is not in `MULTIPLIERS` | `FormField` "Point value": empty text input, `aria-required`, help `POINT_VALUE_HELP`, hidden `pv_for`. No placeholder number, no default. |
 
@@ -422,7 +422,7 @@ Skip link, nav, Back link, (error summary or flash when present, focused on load
 ### 10.2 Wiring
 
 - Every control has a real `<label for>`; Side is a `fieldset` with `legend`, help via `aria-describedby`, errors appended to it (like `rules_question.html`; errors inside the fieldset).
-- Errors: summary + per-field message with decorative icon, `aria-invalid="true"`, `aria-describedby` (help id then error id), no "Error:" prefix, no `role="alert"`. The summary links to field ids; Side's link targets the tile container id (`id_side`). Errors inside a closed More details open it.
+- Errors: summary + per-field message with decorative icon, `aria-invalid="true"`, `aria-describedby` (help id then error id; visually the error sits directly under the input, above the help, as in `field.html`), no "Error:" prefix, no `role="alert"`. The summary links to field ids; Side's link targets the tile container id (`id_side`). Errors inside a closed More details open it.
 - The USD suffix is `aria-hidden`; the help text says "in USD".
 - Symbol's `aria-describedby` = help id, `id_symbol_currency_hint`, then the error id when present, so a screen reader hears the hint on focus.
 - Read-only values (known Point value, Size) are `<dl>` rows, not disabled inputs, so they are readable and reachable by screen readers and cannot be mistaken for editable fields.
@@ -531,6 +531,7 @@ Name check: a grep of both `copy.py` files found no clash with the new keys belo
 |---|---|
 | SYMBOL_REQUIRED | Enter the symbol, for example AAPL or CLZ6. |
 | SYMBOL_TOO_LONG | Use 32 characters or fewer. |
+| SYMBOL_CONTROL_CHARACTERS | Symbols can't contain hidden characters; retype it instead of pasting. (zero-width, bidi override, tab, NUL or any other control character) |
 | SIDE_REQUIRED | Choose Long or Short. |
 | QUANTITY_REQUIRED | Enter how many you traded. |
 | QUANTITY_NOT_NUMBER | Enter a number like 10 or 0.5. Use a period for decimals. |
@@ -539,6 +540,7 @@ Name check: a grep of both `copy.py` files found no clash with the new keys belo
 | ENTRY_PRICE_REQUIRED | Enter your entry price. |
 | PRICE_NOT_NUMBER | Enter a number like 100.25. Use a period for decimals. |
 | PRICE_ZERO | Enter a price other than 0. |
+| TRADE_VALUE_TOO_LARGE | Price, quantity and point value together are too large; check them for a typo. (Under Entry price and/or Exit price when abs(price) x quantity x point value reaches 10^15. Skipped while the point value is unresolved.) |
 | EXIT_PRICE_NEEDED | Add an exit price, or clear the exit time. |
 | EXIT_TIME_NEEDED | Add an exit time, or clear the exit price. |
 | EXIT_PRICE_REQUIRED | Enter the exit price. (close mode, both exit fields blank or the price blank) |
@@ -546,10 +548,11 @@ Name check: a grep of both `copy.py` files found no clash with the new keys belo
 | EXIT_PRICE_REQUIRED_CLOSED | A closed trade needs an exit price. (edit-closed mode only) |
 | EXIT_TIME_REQUIRED_CLOSED | A closed trade needs an exit time. (edit-closed mode only) |
 | ENTRY_TIME_REQUIRED | Enter when you entered the trade. |
-| TIME_INVALID | Enter a date and time like 2026-03-02 09:30. (an unparseable entry or exit time, e.g. the text fallback) |
+| TIME_INVALID | Enter a date and time like 2026-03-02 09:30. (an unparseable entry or exit time, e.g. the text fallback; also a year the server cannot represent that is not a past date) |
+| TIME_TOO_OLD | Use a date in 1970 or later. (A well-formed time with a year before 1970. Not `TIME_INVALID`: its example would show the user a format they already used. A year too far ahead to convert is a future time: show `TIME_FUTURE`, not `TIME_INVALID`.) |
 | TIME_FUTURE | That time hasn't happened yet in {zone}. Check the date, time and time zone. |
 | TIME_NOT_READABLE | We couldn't use that time in {zone}. Check the date and time, then try again. |
-| EXIT_BEFORE_ENTRY | The exit time can't be before the entry time ({entry}). (Under Exit time; in the edit-versus-close race it is shown under Entry time, same string.) |
+| EXIT_BEFORE_ENTRY | The exit time can't be before the entry time ({entry}). (`{entry}` is always written with the year, in the user's zone, e.g. "Mar 2, 2026, 9:30 AM" (`M j, Y, g:i A`), no zone suffix since the time help names it. Do not reuse `display.opened()`, which drops the year for the current year: a wrong-year typo is a likely cause of this error. Under Exit time; in the edit-versus-close race it is shown under Entry time, same string.) |
 | POINT_VALUE_NEEDED | We don't have a point value for {symbol} yet. Enter one; for shares, use 1. |
 | POINT_VALUE_NOT_NUMBER | Enter a number like 1000. Use a period for decimals. |
 | POINT_VALUE_NOT_POSITIVE | Point value needs to be more than 0. |
@@ -559,7 +562,9 @@ Name check: a grep of both `copy.py` files found no clash with the new keys belo
 | FEES_DECIMALS | Use up to 4 decimal places. |
 | FEES_NEEDS_EXIT | Fees apply once a trade is closed. Add an exit, or clear Fees. |
 | NUMBER_TOO_LARGE | That number is too large. (existing key) |
-| ACCOUNT_TOO_LONG, ACCOUNT_CONTROL_CHARACTERS | Existing keys, reused. |
+| ACCOUNT_TOO_LONG, ACCOUNT_CONTROL_CHARACTERS | Existing keys, reused. A NUL in the Account label shows `ACCOUNT_CONTROL_CHARACTERS`; a NUL in the Symbol shows `SYMBOL_CONTROL_CHARACTERS`. No separate NUL key. |
+
+One message per field: the first failing check wins (control characters, then too long, then the rest). The control-character check must run in the field's `to_python` (before validators), so Django's built-in `ProhibitNullCharactersValidator` ("Null characters are not allowed.") never also fires. Tests assert exactly one error on the field.
 
 No `STOP_RECHECK_REFUSED`: a stop on the wrong side after an edit is allowed (7.3). The words come from existing keys, no new key: `R_STATUS_STOP_NOT_A_RISK` ("Your saved stop isn't on the loss side of this trade's entry price, so it's left out of Avg R.") on the journal page after the save, and `STOP_WRONG_SIDE` ("Your stop should sit on the loss side of your entry price.") on the next journal save that leaves planned risk blank. Both in `journal/copy.py`.
 
@@ -617,7 +622,7 @@ New Alpine component: `nowButton` only (`static/js/app.js`). New icons: none.
 
 ### New context keys (names for backend to supply)
 
-Form pages (add, close, edit): `mode` ("add" | "close" | "edit"); `form`; `zone`; `pv_state` ("pending" | "known" | "unknown"); `pv_root`; `pv_value_display` (formatted, known state); `pv_symbol` (normalized symbol the unknown input is for, rendered into `pv_for`); `more_open`; `show_fees` (false only for edit-open); `show_exit` (false for edit-open); `exit_required` (edit-closed and close); `form_token` (**add mode only**: the signed token, ADR-0008 §4; absent on close and edit); `account_labels`, `account_placeholder` (all brokers, per AC 31); `has_journal` (edit); `trade` (same keys the journal page passes to `trade_summary.html`, including `is_open`) for close and edit; `size_display` (close); `entry_time_display` (for `EXIT_BEFORE_ENTRY`).
+Form pages (add, close, edit): `mode` ("add" | "close" | "edit"); `form`; `zone`; `pv_state` ("pending" | "known" | "unknown"); `pv_root`; `pv_value_display` (formatted, known state); `pv_symbol` (normalized symbol the unknown input is for, rendered into `pv_for`); `more_open`; `show_fees` (false only for edit-open); `show_exit` (false for edit-open); `exit_required` (edit-closed and close); `form_token` (**add mode only**: the signed token, ADR-0008 §4; absent on close and edit); `account_labels`, `account_placeholder` (all brokers, per AC 31); `has_journal` (edit); `trade` (same keys the journal page passes to `trade_summary.html`, including `is_open`) for close and edit; `size_display` (close); `entry_time_display` (for `EXIT_BEFORE_ENTRY`; always includes the year, see section 12).
 Removed from the earlier draft: `locked_fields` (ADR-0008 §2, no field locks). No other new key is needed for the wrong-side stop state (7.3) or the Close double submit.
 Form class: shape-dependent inputs are **absent from the form** for that request, not rendered as disabled inputs (edit-open has no exit or Fees fields; a POST naming them writes nothing, AC 38). Read-only rows (known Point value, Size) carry no input name.
 Field values: `entry_time` and `exit_time` bound as `YYYY-MM-DDTHH:MM` in the user's zone.

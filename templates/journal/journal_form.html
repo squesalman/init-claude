@@ -7,6 +7,8 @@
 <p><a href="{{ back_url }}" class="hidden min-h-[44px] items-center gap-1 sm:inline-flex">{% include "partials/icon.html" with name="arrow-left" %}{{ copy.JOURNAL_BACK }}</a><a href="{{ back_url_card }}" class="inline-flex min-h-[44px] items-center gap-1 sm:hidden">{% include "partials/icon.html" with name="arrow-left" %}{{ copy.JOURNAL_BACK }}</a></p>
 
 {% include "journal/partials/trade_summary.html" %}
+{# Trade actions (docs/design/manual-entry.md 3.3), manual trades only. PR M2a: Close; Edit and Delete arrive with PR M2b. #}
+{% if trade.is_manual and trade.is_open %}<div role="group" aria-label="{{ copy.TRADE_ACTIONS_LABEL }}" class="mt-2 flex flex-wrap gap-x-4"><a href="{% url 'trade_close' trade.id %}" class="inline-flex min-h-[44px] items-center underline">{{ copy.TRADE_CLOSE }}</a></div>{% endif %}
 
 <p class="mt-4 text-text-muted">{{ copy.JOURNAL_INTRO }}</p>
 

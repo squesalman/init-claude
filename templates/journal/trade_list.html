@@ -4,7 +4,7 @@
 {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-3">
   <h1 class="text-title font-semibold">{{ copy.TRADES_TITLE }}</h1>
-  {% if not empty_heading %}<a href="{% url 'imports' %}" class="btn-primary w-full sm:w-auto">{{ copy.IMPORT_TRADES }}</a>{% endif %}
+  {% if not empty_heading %}<div class="flex flex-wrap gap-3"><a href="{% url 'imports' %}" class="btn-primary w-full sm:w-auto">{{ copy.IMPORT_TRADES }}</a><a href="{% url 'trade_add' %}" class="btn-secondary w-full sm:w-auto">{{ copy.ADD_TRADE }}</a></div>{% endif %}
 </div>
 {% if empty_heading %}
 {% include "journal/partials/trades_empty.html" %}

@@ -40,6 +40,7 @@ TOO_MANY_ROWS = (
 _NUMBER = re.compile(r"-?[0-9]{1,20}(?:\.[0-9]{1,20})?")
 _ID = re.compile(r"\S{1,100}")  # leaves room for the ":entry"/":exit" suffix in 128 chars
 _CONTRACT = re.compile(r"(.+)[A-Z][0-9]")  # root + month letter + 1-digit year
+_MAX_SYMBOL = 32  # Execution.symbol VARCHAR(32)
 _TIMESTAMP = "%m/%d/%Y %H:%M:%S %z"  # month first, own offset per row (verified)
 _PRICE_PLACES, _PRICE_DIGITS = 10, 20  # Execution.price / quantity: NUMERIC(20,10)
 _FEE_PLACES, _FEE_DIGITS = 4, 19  # Execution.fees: NUMERIC(19,4)
@@ -131,6 +132,18 @@ def parse_timestamp(raw: dict, column: str) -> datetime:
         raise _unreadable(column) from None
 
 
+def contract_root(symbol: str) -> str | None:
+    """The futures root (CLZ6 -> CL), or None when the symbol has no month+year suffix. The
+    one root rule for the importer and manual entry (ADR-0008 section 7). Longer than a
+    stored symbol can be: None, checked before the regex runs.
+    ponytail: the table lives in the Topstep importer; move it to journal/instruments.py
+    when a second importer needs it."""
+    if len(symbol) > _MAX_SYMBOL:
+        return None
+    match = _CONTRACT.fullmatch(symbol)
+    return match[1] if match else None
+
+
 def _legs(raw: dict) -> tuple[dict, dict]:
     trade_id = raw["Id"]
     if not _ID.fullmatch(trade_id):
@@ -138,11 +151,11 @@ def _legs(raw: dict) -> tuple[dict, dict]:
     side_sign = {"Long": 1, "Short": -1}.get(raw["Type"])
     if side_sign is None:
         raise _unreadable("Type")
-    contract = _CONTRACT.fullmatch(raw["ContractName"])
-    if not contract or contract[1] not in MULTIPLIERS:
-        root = (contract[1] if contract else raw["ContractName"])[:16]  # never echo a huge cell
-        raise _RowError(f"The contract {root} is not supported yet, so this row was left out.")
-    multiplier = MULTIPLIERS[contract[1]]
+    root = contract_root(raw["ContractName"])
+    if root not in MULTIPLIERS:
+        shown = (root or raw["ContractName"])[:16]  # never echo a huge cell
+        raise _RowError(f"The contract {shown} is not supported yet, so this row was left out.")
+    multiplier = MULTIPLIERS[root]
 
     entry_price, exit_price = _price(raw, "EntryPrice"), _price(raw, "ExitPrice")
     size = _number(raw, "Size")

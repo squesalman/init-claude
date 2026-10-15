@@ -250,14 +250,15 @@ def test_login_required_notice_is_a_status_notice(client):
 # --- /trades/ empty state (5.4 A) --------------------------------------------------------
 
 
-def test_trades_empty_state_shows_one_action(client, user):
+def test_trades_empty_state_shows_import_and_add_trade(client, user):
+    # docs/design/manual-entry.md 3.2: Add trade joins Import trades.
     client.force_login(user)
     markup = client.get("/trades/").content.decode()
     main = Doc(re.search(r'<main id="main".*?</main>', markup, re.S).group(0))
     assert "No trades yet" in main.text
-    assert "Upload your TopstepX 'Trades' export and your trades show up here." in main.text
-    assert [a["href"] for a in main.all("a")] == ["/imports/"]
-    assert "Import trades" in main.text
+    assert "Upload your TopstepX 'Trades' export, or add a trade by hand. Your trades show up here." in main.text
+    assert [a["href"] for a in main.all("a")] == ["/imports/", "/trades/new/"]
+    assert "Import trades" in main.text and "Add trade" in main.text
 
 
 # --- error pages --------------------------------------------------------------------------

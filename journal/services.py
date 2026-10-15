@@ -9,7 +9,9 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 
+from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 
 from journal.importers.topstep import ImportFileError, parse
@@ -212,3 +214,118 @@ def save_journal_entry(
         fields["rules_followed"] = rules_followed
     entry, _ = entries.update_or_create(user=user, opening_execution=opening, defaults=fields)
     return entry
+
+
+# --- Manual entry (ADR-0008 sections 1, 4, 5) ---------------------------------------------------
+
+MANUAL = Execution.SOURCE_MANUAL  # "manual": the source and the broker of every manual fill
+MANUAL_CURRENCY = "USD"  # spec ruling: fixed, never posted (AC 12)
+_SIDES = {"long": ("buy", "sell"), "short": ("sell", "buy")}  # (entry, exit), topstep-import 5
+# Written to every leg of a manual trade (domain section 7.4); Close copies them from the entry.
+_SHARED = (
+    "broker_trade_id", "broker_account_label", "symbol", "quantity", "contract_multiplier",
+    "currency",
+)
+
+
+class AlreadyClosed(Exception):
+    """The trade has its exit already; nothing was written (AC 36)."""
+
+
+class ExitBeforeEntry(Exception):
+    """Raised under the row lock; args[0] is the stored entry time. Nothing was written."""
+
+
+def manual_key(nonce: str) -> str:
+    """broker_trade_id of one manual trade: "manual:" + 32 hex (ADR-0008 section 1)."""
+    return f"manual:{nonce}"
+
+
+def _manual_fills(user, pk) -> list[Execution] | None:
+    """The one gate for every write to an existing manual fill (close here; edit and delete
+    in PR M2b). Call it inside the service's atomic(). None for a missing or another user's
+    id, an imported fill, a NULL-key manual row (test stand-ins for fill-only data), a closing
+    fill, or a key with more than 2 fills (logged).
+    Two locking statements on purpose: the first locks the opener, so a second close of the
+    same trade waits there; the second starts after that wait and, under READ COMMITTED, sees
+    an exit the first close committed. A single locking SELECT would not."""
+    manual = Execution.objects.for_user(user).filter(
+        source=MANUAL, broker=MANUAL, broker_trade_id__isnull=False
+    )
+    opener = manual.select_for_update().filter(pk=pk).first()
+    if opener is None:
+        return None
+    fills = list(
+        manual.select_for_update()
+        .filter(broker_trade_id=opener.broker_trade_id)
+        .order_by("executed_at", "id")
+    )
+    if fills[0].pk != pk:
+        return None
+    if len(fills) > 2:
+        log.error("manual trade has %d fills: user=%s", len(fills), user.pk)  # no key, no ids
+        return None
+    return fills
+
+
+def add_manual_trade(
+    user, nonce, *, symbol, side, quantity, entry_price, entry_time, exit_price, exit_time,
+    fees, account, contract_multiplier,
+) -> int:
+    """Values come from a valid ManualTradeForm; nonce from the view's signed add token. The
+    opening (entry) fill's pk. A replay of one token returns the first request's trade and
+    writes nothing (AC 14)."""
+    key = manual_key(nonce)
+    with transaction.atomic():
+        # Serialize this user's adds: two POSTs of one token must not both miss the lookup
+        # below (one key on two entry fills: the matcher would make one double-size trade).
+        # The lookup is a later statement, so it sees a fill committed while this one waited.
+        # ponytail: per-user lock on manual adds; a user adds trades by hand, seconds apart,
+        # so contention is nil.
+        list(get_user_model().objects.select_for_update().filter(pk=user.pk).values_list("pk"))
+        # ponytail: broker_trade_id has no index; this filters inside one user's rows (the
+        # user-leading indexes). Add an index only on measurement (ADR-0008 section 8).
+        first = (
+            Execution.objects.for_user(user).filter(source=MANUAL, broker_trade_id=key)
+            .order_by("pk").values_list("pk", flat=True).first()
+        )
+        if first is not None:
+            return first
+        entry_side, exit_side = _SIDES[side]
+        common = {
+            "user": user, "broker": MANUAL, "source": MANUAL, "broker_trade_id": key,
+            "broker_account_label": account, "symbol": symbol, "quantity": quantity,
+            "contract_multiplier": contract_multiplier, "currency": MANUAL_CURRENCY,
+        }
+        entry = Execution.objects.create(
+            side=entry_side, price=entry_price, fees=Decimal("0"), executed_at=entry_time,
+            **common,
+        )
+        if exit_price is not None:
+            # Inserted after the entry: on equal times the lower pk keeps the entry the opener
+            # (ADR-0008 section 1 rule 3, vector 32a). All fees sit on the exit (domain 7.3).
+            Execution.objects.create(
+                side=exit_side, price=exit_price, fees=fees, executed_at=exit_time, **common
+            )
+    return entry.pk
+
+
+def close_manual_trade(user, pk, *, exit_price, exit_time, fees) -> bool | None:
+    """One full-size exit fill (AC 34). None = no such manual trade. Raises AlreadyClosed or
+    ExitBeforeEntry, decided from the locked rows, not from the rendered form."""
+    with transaction.atomic():
+        fills = _manual_fills(user, pk)
+        if fills is None:
+            return None
+        if len(fills) == 2:
+            raise AlreadyClosed
+        [entry] = fills
+        if exit_time < entry.executed_at:  # compared in UTC; equal is fine (domain 7.1)
+            raise ExitBeforeEntry(entry.executed_at)
+        Execution.objects.create(
+            user=user, broker=MANUAL, source=MANUAL,
+            side="sell" if entry.side == "buy" else "buy",
+            price=exit_price, fees=fees, executed_at=exit_time,
+            **{name: getattr(entry, name) for name in _SHARED},
+        )
+    return True
